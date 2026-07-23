@@ -41,9 +41,10 @@ as it is measured and plotted live.
   - use `py -m pip` (not bare `pip`), so the packages land in the same
     Python that `py` launches — mixing them is the classic
     "No module named 'wx'" on machines with several Pythons
-  - `pyvisa-py` is the VISA backend for network/serial instruments; for
-    GPIB instruments install NI-VISA as well (pyvisa-py does not cover
-    GPIB on Windows)
+  - `pyvisa-py` is the VISA backend for network/serial instruments;
+    **for GPIB instruments install
+    [NI-VISA](https://www.ni.com/en/support/downloads/drivers/download.ni-visa.html)
+    as well (pyvisa-py does not cover GPIB on Windows)**
 - Optional, for the AI assistant: [Ollama](https://ollama.com) and
   `ollama pull llama3.1:8b`
 - Optional, per bridge: see the header of the adapter in `qbridge/`
