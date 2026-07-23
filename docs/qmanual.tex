@@ -1,0 +1,870 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amssymb}
+\usepackage{microtype}
+\usepackage[a4paper, top=2.4cm, bottom=2.4cm, left=2.7cm, right=2.7cm]{geometry}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{fancyhdr}
+\usepackage{tcolorbox}
+\usepackage{hyperref}
+\tcbuselibrary{skins,breakable}
+
+\definecolor{qblue}{HTML}{1a2a3a}
+\definecolor{qaccent}{HTML}{3d5a80}
+\definecolor{qlight}{HTML}{eef3f7}
+\definecolor{qwarn}{HTML}{a5350d}
+\definecolor{qwarnbg}{HTML}{fbeee7}
+\definecolor{qgrey}{HTML}{7a7a7a}
+\definecolor{qcode}{HTML}{2d2d40}
+\definecolor{qcodebg}{HTML}{f4f4f6}
+
+\hypersetup{colorlinks=true, linkcolor=qaccent, urlcolor=qaccent,
+  pdftitle={qmeas v2 User Manual}, pdfauthor={qmeas project}}
+
+\titleformat{\section}{\normalfont\Large\bfseries\color{qblue}}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\normalfont\large\bfseries\color{qaccent}}{\thesubsection}{0.6em}{}
+\titlespacing{\section}{0pt}{1.4em}{0.5em}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{qgrey}qmeas v2}
+\fancyhead[R]{\small\color{qgrey}\leftmark}
+\fancyfoot[C]{\small\color{qgrey}\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\newtcolorbox{tip}{breakable, skin=enhanced, colback=qlight, colframe=qaccent,
+  boxrule=0.4pt, left=2mm, right=2mm, top=1mm, bottom=1mm,
+  fonttitle=\bfseries, title=Tip}
+\newtcolorbox{warn}{breakable, skin=enhanced, colback=qwarnbg, colframe=qwarn,
+  boxrule=0.4pt, left=2mm, right=2mm, top=1mm, bottom=1mm,
+  fonttitle=\bfseries, title=Watch out}
+\newtcolorbox{note}{breakable, skin=enhanced, colback=qwarnbg, colframe=qwarn,
+  boxrule=0.4pt, left=2mm, right=2mm, top=1mm, bottom=1mm,
+  fonttitle=\bfseries, title=Note}
+
+\newcommand{\code}[1]{{\ttfamily\color{qcode}#1}}
+
+\newtcolorbox{gridex}[1]{skin=enhanced, colback=qcodebg, colframe=qgrey!50,
+  boxrule=0.5pt, arc=0.6mm, left=2mm, right=2mm, top=1.4mm, bottom=1.4mm,
+  fontupper=\ttfamily\small, title={#1}, fonttitle=\bfseries\small\color{qblue},
+  coltitle=qblue, colbacktitle=qcodebg, titlerule=0pt}
+
+\newtcolorbox{cmd}{skin=enhanced, colback=qcodebg, colframe=qgrey!45,
+  boxrule=0.5pt, arc=0.6mm, left=2.4mm, right=2mm, top=1.6mm, bottom=1.6mm,
+  fontupper=\ttfamily\small\color{qcode}}
+
+\newtcolorbox{license}{skin=enhanced, colback=white, colframe=qgrey!55,
+  boxrule=0.5pt, arc=0.6mm, left=3mm, right=3mm, top=2mm, bottom=2mm,
+  fontupper=\small}
+
+\setlist[itemize]{leftmargin=1.3em, itemsep=1.5pt, topsep=2pt}
+\setlist[enumerate]{leftmargin=1.5em, itemsep=3pt, topsep=2pt}
+
+\begin{document}
+
+% ---------------- title page ----------------
+\begin{titlepage}
+\centering
+\vspace*{3.2cm}
+{\Huge\bfseries\color{qblue} qmeas}\\[6pt]
+{\LARGE\color{qaccent} version 2}\\[10pt]
+{\large user manual}\\[1.4cm]
+{\normalsize\color{qgrey} Instrument control for cryogenic magneto-transport measurements}\\[2.5cm]
+{\small\color{qgrey}
+License and liability \textbullet{} installation \textbullet{} connecting instruments\\
+the task grid \textbullet{} nesting and linking \textbullet{} while-loops \textbullet{} scripts \textbullet{} running}
+\vfill
+{\footnotesize\color{qgrey} Read the license and liability sections before relying on qmeas
+for any measurement.\\ The rest is short --- skim \S3--\S4 once, then jump to whatever you need.}\\[1.4em]
+{\footnotesize\itshape\color{qwarn} This manual was generated entirely by an AI system and may
+contain errors.\\ Verify any critical detail against the software itself and your instruments'
+own documentation.}\\[0.8em]
+{\footnotesize\color{qgrey} qmeas and this manual were developed with Anthropic's Claude.}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% ======================================================================
+\section{License}
+
+qmeas is released under the \textbf{MIT License}. In plain terms: you may
+use, copy, modify, and redistribute it freely, including in commercial and
+closed-source work, provided the copyright notice and the license text below
+are kept with any substantial copy. There is no warranty --- see the
+liability section that follows, which is part of the license, not an
+add-on.
+
+\begin{license}
+MIT License\\[4pt]
+
+Copyright (c) 2026 Project h\_e2\\[4pt]
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the ``Software''), to
+deal in the Software without restriction, including without limitation the
+rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:\\[4pt]
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.\\[4pt]
+
+THE SOFTWARE IS PROVIDED ``AS IS'', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+IN THE SOFTWARE.
+\end{license}
+
+% ======================================================================
+\section{Liability and safety disclaimer}
+
+The warranty disclaimer above is legal boilerplate; this section spells out
+what it means for a program that drives real cryogenic and high-field
+hardware.
+
+\begin{warn}
+qmeas sends commands to laboratory instruments --- magnets, sources,
+cryostats --- that can damage equipment, samples, or people if operated
+incorrectly. The software is provided without warranty of any kind. The
+authors accept \textbf{no liability} for any loss, damage, injury, or cost
+arising from its use, including from software defects, incorrect device
+configuration, mis-entered command strings, network faults, or
+instrument-specific behaviour the software cannot anticipate.
+\end{warn}
+
+Practical consequences, all of which are your responsibility, not the
+software's:
+
+\begin{itemize}
+  \item \textbf{You are responsible for every command string you define.}
+  qmeas transmits what you tell it to. A wrong SCPI string, a wrong ramp
+  rate, or a wrong verify condition can drive an instrument outside safe
+  limits. Verify command strings against the instrument's own manual.
+  \item \textbf{Hardware interlocks are not qmeas's job.} Magnet quench
+  protection, temperature limits, current limits, and emergency stops must
+  be enforced by the instruments and their own safety systems. Do not rely
+  on qmeas as a safety layer.
+  \item \textbf{Test new sequences with Simulate, and at low/safe setpoints
+  first.} Simulate shows what a task list will do without touching hardware.
+  Use it before any long or high-stakes run. It is a convenience, not a
+  guarantee.
+  \item \textbf{Supervise runs that move real fields or temperatures.} The
+  \code{onhold} and Stop mechanisms are best-effort; a network drop or a
+  wedged instrument can prevent a clean abort.
+\end{itemize}
+
+By installing and using qmeas you accept these terms.
+
+% ======================================================================
+\section{Installation}
+
+qmeas runs on \textbf{Windows} (the lab's target platform) and needs Python
+plus a few packages. The optional AI Assistant additionally needs Ollama;
+that part can be skipped entirely --- the measurement software is fully
+functional without it.
+
+\subsection{Step 1 --- Python}
+
+Install \textbf{Python 3.11 or newer} (64-bit) from
+\href{https://www.python.org/downloads/}{python.org}. During the installer,
+tick \textbf{``Add Python to PATH''} --- if you miss it, the \code{python} and
+\code{pip} commands below won't be found.
+
+Confirm it in a \emph{new} PowerShell or Command Prompt window:
+
+\begin{cmd}
+python --version
+\end{cmd}
+
+\subsection{Step 2 --- Python packages}
+
+qmeas depends on three third-party packages; everything else it uses is in
+Python's standard library. Install them with pip:
+
+\begin{cmd}
+pip install wxpython matplotlib pyvisa pyvisa-py
+\end{cmd}
+
+What each is for:
+
+\begin{center}\small
+\begin{tabular}{@{}p{2.9cm}p{10.7cm}@{}}
+\toprule
+\code{wxpython} & The GUI toolkit --- all windows, panels, the task grid.
+  Required. \\
+\code{matplotlib} & The live Graph window. If it's missing, qmeas still
+  runs and measures; only the plot window shows a placeholder. \\
+\code{pyvisa} & The instrument-communication layer (GPIB, USB, serial,
+  TCPIP). Required for talking to any real device. \\
+\code{pyvisa-py} & Pure-Python VISA backend, used automatically as a
+  fallback when no vendor VISA library (NI-VISA) is present. Covers
+  TCPIP/socket instruments --- which is most of this lab. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{tip}
+\textbf{GPIB or USB instruments} additionally need a vendor VISA library ---
+in practice \textbf{NI-VISA} (free from ni.com). The pure-Python
+\code{pyvisa-py} backend handles TCPIP/socket devices but \emph{not} GPIB or
+USB. If qmeas can't load a vendor library it falls back to \code{pyvisa-py}
+automatically and warns you once; TCPIP instruments keep working, GPIB/USB
+won't until NI-VISA is installed.
+\end{tip}
+
+\subsection{Step 3 --- Run qmeas}
+
+Put the qmeas files (\code{qmeas.py} and its companion modules, the
+\code{images/}, \code{devices/}, and \code{custom/} folders) in one folder,
+open a terminal there, and run:
+
+\begin{cmd}
+python qmeas.py
+\end{cmd}
+
+That's the whole measurement install. The next section is only needed for
+the optional AI Assistant.
+
+% ======================================================================
+\section{Optional --- the AI Assistant (Ollama)}
+\label{sec:assistant}
+
+qmeas includes a built-in AI assistant, opened via \textbf{View $\rightarrow$
+AI Assistant}. It can answer questions about qmeas --- what a red LED means,
+how nesting works, why a row failed --- and help you set up an experiment:
+which device settings, commands, and task rows a measurement needs. It is
+optional; qmeas measures perfectly well without it.
+
+The assistant runs a language model \textbf{locally} through Ollama --- nothing
+is sent to any cloud service, which is the point: measurement data and device
+configurations never leave the machine.
+
+\begin{warn}
+This is a \textbf{local model with limited capabilities} --- far smaller than
+cloud AI services --- and it \textbf{may give incorrect answers}, including
+confidently wrong ones. Treat its output as a starting point, not an
+authority: check suggested device settings and command strings against the
+instrument's own manual, and use Simulate before running anything it helped
+set up.
+\end{warn}
+
+\subsection{Step 1 --- Install Ollama}
+
+Download the Windows installer from
+\href{https://ollama.com/download/windows}{ollama.com/download/windows} and
+run it (no administrator rights needed for a standard install). It installs a
+background service and a system-tray app, and exposes a local API at
+\code{http://localhost:11434}. If Windows Firewall prompts on first start,
+allow access for \textbf{private} networks --- this is local only, nothing is
+exposed to the internet.
+
+Confirm in a new terminal:
+
+\begin{cmd}
+ollama --version
+\end{cmd}
+
+\subsection{Step 2 --- Pull a model}
+
+Models are downloaded with \code{ollama pull}. The recommended model is
+\code{llama3.1:8b} --- it fits an 8~GB GPU and, in testing, follows the
+assistant's structured instructions (e.g.\ the two ways to set up a magnet's
+verify) noticeably more reliably than similarly-sized alternatives:
+
+\begin{cmd}
+ollama pull llama3.1:8b
+\end{cmd}
+
+Test that it responds:
+
+\begin{cmd}
+ollama run llama3.1:8b "Reply with the single word: ok"
+\end{cmd}
+
+If you have a larger GPU (or a remote GPU machine), a bigger model gives
+better answers on multi-step setup questions --- see the table below. What
+matters most for this assistant is instruction-following, not raw size, so a
+strong 8B is a good default rather than a compromise.
+
+\subsection{Step 3 --- Hardware and model size}
+
+Local models are limited by GPU memory (VRAM). Rough guide for quantised
+(Q4) models:
+
+\begin{center}\small
+\begin{tabular}{@{}p{3.6cm}p{4.6cm}p{5.4cm}@{}}
+\toprule
+\textbf{GPU VRAM} & \textbf{Comfortable model} & \textbf{Notes} \\
+\midrule
+8 GB  & 8B (\code{llama3.1:8b}) & Recommended; fits entirely in VRAM and
+  answers fluently. \\
+12 GB & 13--14B & A step up if it fits fully in VRAM. \\
+24 GB & 32B & Good middle ground. \\
+48 GB+ & 70--72B (e.g.\ \code{llama3.1:70b}) & Best answers on
+  multi-step setup questions. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Key rule: pick a model that fits ENTIRELY in your GPU's VRAM. A model that
+spills into system RAM/CPU (e.g.\ a 14B on an 8~GB card, or a 70B without the
+VRAM for it) becomes drastically slower --- usually worse than a smaller model
+that fits. On the common 8~GB lab cards (e.g.\ NVIDIA T1000), \code{llama3.1:8b}
+is the right choice; a 14B is not worth it there.
+
+No suitable GPU? Models still run on CPU, just slowly --- fine for occasional
+questions, tedious for anything interactive. A large model on CPU is
+impractically slow, so use an 8B there.
+
+\begin{tip}
+Ollama unloads a model from memory after 5 minutes idle by default, so the
+next question waits for a reload. If the assistant feels sluggish between
+questions, set the environment variable \code{OLLAMA\_KEEP\_ALIVE} to
+\code{30m} (or longer) to keep the model resident.
+\end{tip}
+
+\subsection{Step 4 --- Use it}
+
+Open \textbf{View $\rightarrow$ AI Assistant}. qmeas connects to Ollama at
+its default local address (\code{localhost} port \code{11434}) and lets you
+choose among the models you've pulled. No further configuration is needed
+beyond having Ollama running with at least one model downloaded.
+
+
+
+% ======================================================================
+\section{The five panels}
+
+qmeas is a set of dockable panels. Drag any panel's title bar to move or
+undock it; the \textbf{View} menu shows/hides panels and offers vertical or
+horizontal stacking presets.
+
+\begin{itemize}
+  \item \textbf{Devices \& Commands} --- the tree of instruments and the
+  read/write commands you've defined for each. Double-click a command to
+  drop it into the task list.
+  \item \textbf{Device Editor} --- add or edit an instrument's address and
+  connection settings. Hidden until you click a device or open it from
+  \textbf{View}.
+  \item \textbf{Tasks} --- the ordered grid of steps that make up a run.
+  Most of this manual is about building rows here.
+  \item \textbf{Log} --- a timestamped record of each executed row.
+  \item \textbf{Graph} --- a \emph{separate window} (not a docked panel, so
+  you can throw it on a second monitor) that live-plots the running sweep.
+\end{itemize}
+
+Two virtual entries always sit in the device tree: \code{control} (pause,
+prompt, stop, counter, and while-loops --- \S\ref{sec:while}) and \code{script} (runs a
+Python file from the \code{custom/} folder; off by default).
+
+% ======================================================================
+\section{Connecting a device}
+
+This is where most first-time trouble lives, so it gets the most space.
+Open the \textbf{Device Editor}, click \textbf{New Device}, and work through
+the buttons.
+
+\subsection{Scan first --- but don't trust an empty result}
+
+\textbf{Scan} asks the VISA layer to list everything it can see: GPIB, USB,
+serial, and instruments that answer VISA's LAN discovery.
+
+\begin{warn}
+A device that does \emph{not} appear in the scan is very often still there
+and perfectly usable. Most LAN instruments in this lab (lock-ins, magnet
+controllers, source-measure units) speak over a plain \textbf{raw TCP
+socket} and have no way to announce themselves --- the scan simply can't
+see them. \textbf{This is normal.} You add them by hand (next section). An
+empty or short scan list is not a fault and not a reason to stop.
+\end{warn}
+
+\subsection{Adding a socket (LAN) device by IP}\label{sec:connecting}
+
+Click \textbf{Add TCPIP\ldots}, enter the instrument's IP address and port,
+and choose \emph{Raw socket (SOCKET)} --- the common case here. (Choose
+\emph{Standard VISA (INSTR)} only if the instrument's manual explicitly
+documents VXI-11 or HiSLIP.)
+
+You must know the IP before this step; qmeas cannot discover it for a
+socket device. The networking pitfalls, in rough order of how often they
+bite:
+
+\begin{itemize}
+  \item \textbf{Same subnet, or nothing connects.} The instrument and the
+  qmeas PC must be on the same local network --- in practice the first three
+  numbers of their IPs match, e.g.\ both \code{192.168.1.x}. If they differ
+  (\code{192.168.1.x} vs \code{192.168.2.x}), the connection just times out.
+  That's a network problem, not a qmeas problem, and no setting inside qmeas
+  will fix it.
+  \item \textbf{DHCP moves addresses.} Most instruments ship set to
+  automatic (DHCP) addressing. Convenient --- until the instrument is
+  power-cycled and comes back on a \emph{different} IP, silently breaking a
+  device that worked yesterday. For anything permanent, either set a static
+  IP in the instrument's own network menu, or reserve its address on the lab
+  router (keyed to its MAC). Then it never moves again.
+  \item \textbf{Find the current IP} from the instrument's front-panel
+  network/LAN menu, or your router's client list.
+  \item \textbf{Ping before qmeas.} From the qmeas PC, run \code{ping
+  <ip>}. No reply $\Rightarrow$ fix the network first; qmeas will do no
+  better than ping can.
+\end{itemize}
+
+\begin{gridex}{Example --- a magnet controller on a raw socket}
+IP\ \ \ \ 192.168.1.42\\
+Port\ \ 7020\\
+Type\ \ Raw socket (SOCKET)
+\end{gridex}
+
+\subsection{HTTP / JSON-RPC devices}
+
+Some instruments expose an HTTP server rather than a socket (e.g.\ the
+Kiutra cryostat's JSON-RPC API). Click \textbf{Add HTTP\ldots} and give the
+host, port, path, and \code{Content-Type}. Each command is then sent as an
+HTTP POST with your command string as the body; the response body comes back
+as the reading. The command strings themselves (the JSON-RPC or REST text)
+are defined later in the Command Editor, exactly like SCPI strings.
+
+\begin{gridex}{Example --- Kiutra JSON-RPC}
+Host\ \ \ \ \ \ \ \ \ \ 192.168.1.55\\
+Port\ \ \ \ \ \ \ \ \ \ 1006\\
+Path\ \ \ \ \ \ \ \ \ \ /\\
+Content-Type\ \ application/json-rpc
+\end{gridex}
+
+\subsection{Termination characters matter}
+
+Every instrument expects each message to end with specific character(s) ---
+the \textbf{write/read termination}. Get these wrong and the symptom is
+maddening: the connection opens fine, but every command times out or returns
+nothing, because the instrument is still waiting for an end-of-message it
+never received. Most raw-socket SCPI gear here uses \code{\textbackslash n}
+for both. When in doubt, the instrument's programming manual states it
+explicitly --- check it before assuming the device is broken.
+
+\subsection{When it still won't talk}
+
+\begin{tip}
+Before deeper debugging: \textbf{restart the instrument}. Single-client LAN
+instruments can get stuck holding a half-open connection from a previous
+crash or an ungraceful disconnect, and will refuse or drop new connections
+until power-cycled. A restart clears this surprisingly often --- try it early,
+not as a last resort.
+\end{tip}
+
+\subsection{Devices without a network interface (qbridge)}
+\label{sec:qbridge}
+
+Some instruments have \emph{no} instrument interface at all --- no SCPI, no
+socket, no VISA. The Quantum Design OptiCool is the standing example: it is
+controlled exclusively through its MultiVu software's OLE interface on the
+control PC. qmeas talks to such devices through a \textbf{qbridge}: a small
+translator process, shipped with qmeas in the \code{qbridge/} folder, that
+speaks the vendor's interface on one side and plain socket text on the other.
+To qmeas, the result is an ordinary raw-socket device.
+
+\textbf{OptiCool setup} (once, on the OptiCool control PC):
+
+\begin{enumerate}
+  \item MultiVu running, as always.
+  \item Install Quantum Design's Python package and start its server next to
+  MultiVu: \code{pip install MultiPyVu} then \code{python -m MultiPyVu}.
+  \item Start the bridge: \code{py opticool.py} (from the \code{qbridge/}
+  folder; listens on port 5100). Set both to auto-start with Windows so you
+  never think about them again.
+\end{enumerate}
+
+Then, in qmeas on any lab PC: \textbf{Add TCPIP\ldots} with the control PC's
+IP, port \code{5100}, raw socket, terminators \code{\textbackslash n} ---
+exactly like any other LAN instrument (\S\ref{sec:connecting} applies,
+including Test Connection, which the bridge answers). Define commands from
+this verb table:
+
+\begin{center}\small
+\begin{tabular}{@{}p{5.2cm}p{8.6cm}@{}}
+\toprule
+\textbf{Command string} & \textbf{Meaning} \\
+\midrule
+\code{TEMP?} & temperature (K), e.g.\ \code{4.2130} \\
+\code{TSTATE?} & temperature status: \code{Stable}, \code{Tracking},
+  \code{Near}, \code{Chasing}, \code{Standby} \\
+\code{AUXTEMP?} & auxiliary thermometer (K) \\
+\code{FIELD?} & field (Oe; 10000\,Oe = 1\,T) \\
+\code{FSTATE?} & field status: \code{Holding (driven)}, \code{Ramping}, \ldots \\
+\code{TEMP [\%],10} & set temperature to the row value, 10\,K/min \\
+\code{FIELD [\%],110} & set field to the row value (Oe), 110\,Oe/s \\
+\code{FHOLD} & freeze the magnet at its current field --- use as this
+  device's \code{onhold} command so Stop/abort parks the magnet \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Everything then works as for any device: sweep \code{FIELD [\%],110} rows,
+log \code{TEMP?} green during any sweep, \emph{verify} a field step on
+\code{FSTATE?} equals \code{Holding (driven)} (type the state string
+exactly), or gate with a while-row on \code{TEMP?}. Waiting for stability is
+deliberately done in qmeas --- visible, abortable, logged --- not inside the
+bridge.
+
+\begin{tip}
+If OptiCool reads fail (\code{READ FAILED} in the data), the usual suspects
+in order: the bridge process isn't running; the MultiPyVu server isn't
+running; MultiVu isn't running. Restart in that order --- the bridge retries
+its upstream connection once by itself, so a brief MultiPyVu hiccup usually
+heals without intervention.
+\end{tip}
+
+\begin{note}
+Two OptiCool adapter variants ship, serving identical commands:
+\code{opticool.py} (via Quantum Design's MultiPyVu --- preferred, but needs
+current OptiCool software) and \code{opticool\_qdi.py} (via the QDInstrument
+.NET server on port 11000, the LabVIEW interface --- works on older software,
+can run on the qmeas PC itself, needs \code{pip install pythonnet} and
+\code{QDInstrument.dll} beside it). Only the bridge changes; qmeas
+configuration is the same for both. State strings differ between the two ---
+always Query Once before using one as a verify target.
+\end{note}
+
+A third shipped adapter, \code{toptica\_bridge.py}, covers TOPTICA DLC~pro/DLC~smart
+controllers (TeraScan): their command line is session-oriented (telnet banner
+plus an access-level handshake), so the bridge holds one SDK session and
+exposes the whole DeCoF parameter tree generically --- qmeas command strings
+\code{GET <param>}, \code{SET <param> [\%]}, \code{EXEC <cmd>} reach any
+parameter without adapter changes (\code{pip install toptica\_lasersdk}; run
+\code{py toptica\_bridge.py --toptica-host <ip>}). Verified TeraScan (DLC
+smart THz) commands, units GHz:
+
+\begin{center}\small
+\begin{tabular}{@{}p{4.6cm}p{9.2cm}@{}}
+\toprule
+\code{GET frequency:frequency-act} & actual THz frequency --- log it green:
+  the readback honestly wanders at the MHz level (the THz output is a
+  two-DFB-laser beat), so recording the actual beats trusting the setpoint \\
+\code{SET frequency:frequency-set [\%]} & frequency setpoint; use a FLOAT
+  number format (DeCoF real-typed parameters reject bare integers) \\
+\code{GET frequency:fast-scan-isscanning} & 1 while the native fast scan
+  runs, else 0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Point-by-point stepping (a \code{SET \ldots frequency-set [\%]} sweep row
+with the reads green) is the qmeas-idiomatic mode and composes with nesting;
+the native continuous TeraScan sweep does not map onto task rows. Discover
+further parameter names with the \code{decof\_tree\_dump.py} helper or the
+TeraScan software's parameter reference. Note that each qmeas read opens a
+short-lived connection \emph{to the bridge} (visible in its log) --- normal;
+the bridge's own session to the controller persists.
+
+Other interface-less instruments follow the same pattern: copy an adapter
+file in \code{qbridge/}, map a handful of verbs to the vendor's API, and the
+device becomes a socket instrument.
+
+\subsection{Finishing up}
+
+Fill in the \textbf{Alias} (lowercase letters/digits, e.g.\ \code{magnet};
+every command becomes \code{alias\_\allowbreak commandname}), termination, timeout
+(milliseconds; 5000 is fine for almost everything), and the device list it
+joins. Click \textbf{Test Connection} --- for SCPI it sends \code{*IDN?} and
+shows the reply; for HTTP it checks the host/port are reachable. Then
+\textbf{Save Device}.
+
+% ======================================================================
+\section{Commands}
+
+A new device has no commands. Right-click it $\rightarrow$ \textbf{Add
+Command\ldots} A \textbf{write} sends a value; \code{[\%]} in its command
+string is where qmeas substitutes the value from the task row. A
+\textbf{query} reads a value back; use \textbf{Query Once} to see the raw
+reply and click-select the part you want.
+
+\begin{gridex}{Example --- two commands on a source aliased \texttt{gate1}}
+Write:\ \ name gate1\_setvoltage\ \ \ \ string  VOLT [\%]\\
+Query:\ \ name gate1\_readcurr\ \ \ \ \ \ string  CURR?
+\end{gridex}
+
+\subsection{Write methods: none, ramp, verify}\label{sec:methods}
+
+A write command can carry a \textbf{Method}, chosen from a dropdown in the
+Command Editor (visible only for a write command that contains a \code{[\%]}
+placeholder). It governs \emph{how} the value is delivered.
+
+\textbf{none} --- write the value in one shot and move on. The default;
+correct for almost everything.
+
+\textbf{ramp} --- approach the target gradually instead of jumping. qmeas
+itself steps the value in one-second increments, each no larger than the
+rate you set, all the way from the current value to the target. Use it
+whenever a sudden jump would be unsafe or unphysical (a gate that must not
+slew, say). Two fields appear:
+
+\begin{itemize}
+  \item \textbf{Ramp rate (units/s)} --- the maximum change per second, in
+  the same units as the command's value. Must be greater than zero.
+  \item \textbf{Based on output state of} --- a read-back (query) command on
+  the \emph{same} device, used to find the \emph{starting} value so qmeas
+  knows where the ramp begins. Pick the query that reports this instrument's
+  present output.
+\end{itemize}
+
+\begin{warn}
+Ramp is \textbf{write-and-forget}: qmeas issues the intermediate setpoints on
+a one-second clock but does \emph{not} check the instrument actually reached
+each one. It paces commands; it does not confirm the hardware kept up. If the
+instrument has its own internal ramp/slew feature, decide which one owns the
+rate --- don't set both against each other. The ramp rate is your
+responsibility to keep within the instrument's safe limits.
+\end{warn}
+
+\textbf{verify} --- after writing, repeatedly read a chosen read-back until it
+reports the expected value, or give up. This is how a step waits for hardware:
+a field setpoint that blocks until the magnet controller reports \code{HOLD},
+for instance. Fields:
+
+\begin{itemize}
+  \item \textbf{Based on output state of} --- the read-back (query) command to
+  poll, on the same device.
+  \item \textbf{\ldots equals} --- the value that read-back must report for the
+  step to be considered done. For a status string, type it exactly
+  (\code{HOLD}); for a number, the target value.
+  \item \textbf{Tolerance ($\pm$, 0 = exact)} --- how close a numeric read-back
+  must be to count as a match. Leave at \code{0} for an exact match (the right
+  choice for status strings like \code{HOLD}); widen it for a numeric setpoint
+  that will never land on the exact digits (e.g.\ a field good to $\pm$0.0005\,T).
+  \item \textbf{Verify timeout (s, 0 = none)} --- how long to keep polling
+  before giving up. On timeout the run \textbf{aborts} (with magnet onhold);
+  \code{0} means wait indefinitely.
+\end{itemize}
+
+\begin{gridex}{Example --- a field setpoint that waits for HOLD}
+Command:\ \ magnet\_setfield\ \ \ \ \ \ string  SOUR:FIELD [\%]\\
+Method:\ \ \ verify\\
+Based on output state of:\ \ magnet\_status\\
+...equals:\ \ HOLD\ \ \ \ \ \ Tolerance:\ 0\ \ \ \ \ Verify timeout:\ 600
+\end{gridex}
+
+\noindent Put that command in a task row with the field value in
+Constant/Start, and the row won't finish --- and the next row won't begin ---
+until \code{magnet\_status} reads \code{HOLD} or 600\,s elapse.
+
+\begin{tip}
+\textbf{Ramp vs.\ verify are independent, not two halves of one thing.} Ramp
+paces the \emph{outgoing} setpoints; verify waits on the \emph{incoming}
+read-back. A magnet controller with its own internal ramp is the classic
+verify case: you write the setpoint, let the controller ramp on its own, and
+\emph{verify} that it reports \code{HOLD} when done --- no qmeas ramp involved.
+A source with no internal ramp is the classic ramp case. You pick one method
+per command.
+\end{tip}
+
+\subsection{Query LEDs: green, red, grey}
+
+Every query command shows a small coloured LED next to it in the Devices \&
+Commands tree. Click it to cycle through three states, which control whether
+that reading is taken during a run and whether it's saved:
+
+\begin{itemize}
+  \item \textbf{Green --- read and save.} The query is polled at every
+  measurement step and its value is written to the data file. This is the
+  normal state for any reading you want to record (a lock-in output, a field
+  value).
+  \item \textbf{Red --- read for verification, don't save.} The query is still
+  available for a write command's \emph{verify} method (\S\ref{sec:methods}) to
+  poll, but it is \emph{not} added to the data file as a measured column. Use
+  it for a status read-back --- e.g.\ \code{magnet\_status} watched by a verify
+  step --- that you don't want cluttering the saved data with a \code{HOLD}
+  column.
+  \item \textbf{Grey --- off.} The query is not polled at all and not saved.
+\end{itemize}
+
+Red and grey behave identically as far as the data file is concerned (neither
+is saved); the difference is a reminder to you that a red query is deliberately
+in use \emph{somewhere} as a verify target, whereas grey is simply idle. The
+state is remembered when you close qmeas and restored next time.
+
+\begin{tip}
+If a status string like \code{HOLD} or a \code{READ FAILED} message is showing
+up as a column in your data files and you don't want it there, the query is
+green --- click its LED to red. It stays available to any verify step that uses
+it, but drops out of the saved data.
+\end{tip}
+
+% ======================================================================
+\section{The task grid}
+
+Each row is one step, run top to bottom. Columns:
+
+\begin{center}\small
+\begin{tabular}{@{}p{2.6cm}p{11.3cm}@{}}
+\toprule
+\textbf{On} & Checkbox. Unchecked rows are skipped, not deleted. \\
+\textbf{Command} & \code{device\_command}, dragged from the tree. \\
+\textbf{Constant/Start} & The single value (constant write) or the sweep's
+  first value. On a linked row, a \code{[\%]} expression instead (\S\ref{sec:linking}). \\
+\textbf{Final} & The sweep's last value. Blank = constant write. \\
+\textbf{Steps} & Number of points, Start$\to$Final. Blank/\code{0} =
+  constant. \\
+\textbf{Integration Time} & Wait after each step: \code{2s}, \code{0.5s},
+  \code{2m} (bare number = seconds; \code{ms} not accepted --- use \code{0.5}
+  not \code{500ms}). \\
+\textbf{Comment} & Free text, copied into the Log. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{tip}
+Fields turn \textcolor{qwarn}{\textbf{red}} when a row is inconsistent ---
+e.g.\ you filled Final but left Steps or Integration Time empty, or typed a
+non-number. A red cell never runs the way you'd want; fix it before pressing
+Start. (This is why the earlier \code{10a}-in-Steps class of silent mistake
+can't slip through unseen.)
+\end{tip}
+
+The \code{control} device gives four fixed rows: \code{pause} (waits the
+Constant value in seconds), \code{userprompt} (popup, waits for you),
+\code{stop} (aborts, same as the Stop button), and \code{counter} (a
+step/time index that writes no instrument --- behaves like a sweep for
+nesting and linking).
+
+% ======================================================================
+\section{Nesting: sweeps inside sweeps}
+
+Nesting chains rows into nested for-loops: for each step of the outer row,
+the inner row runs its whole sweep. Select the row that should be inner,
+right-click $\rightarrow$ \textbf{Nest}; it attaches to the row directly
+above, one level deeper. Build deeper chains bottom-up, one Nest at a time.
+Max depth 4. \textbf{Unnest} peels from the bottom.
+
+\begin{gridex}{Example --- gate sweep at every field}
+Row 1\ \ magnet\_setfield\ \ \ \ Start 0\ \ Final 1\ \ Steps 6\ \ \ IntTime 5s\\
+Row 2\ \ \ \ gate1\_setvoltage\ Start -2\ Final 2\ Steps 21\ IntTime 0.2s\ \ (nested)
+\end{gridex}
+
+\noindent Right-click Row 2 $\rightarrow$ Nest. The run sets field to 0\,T,
+sweeps the gate through all 21 points, steps the field to 0.2\,T, sweeps the
+gate again, \ldots\ $6\times21=126$ points. A counter can be the outer loop
+too --- ``every 10\,s, sweep the gate'' for a drift study:
+
+\begin{gridex}{Example --- counter as the outer (time) loop}
+Row 1\ \ control\_counter\ \ \ \ \ Steps 100\ \ IntTime 10s\\
+Row 2\ \ \ \ gate1\_setvoltage\ Start -2\ Final 2\ Steps 21\ IntTime 0.2s\ \ (nested)
+\end{gridex}
+
+% ======================================================================
+\section{Linking: rows that track a driver}\label{sec:linking}
+
+Linking makes ``follower'' rows compute their value from a ``mother'' row's
+swept value, instead of sweeping on their own. Select the follower,
+right-click $\rightarrow$ \textbf{Link}; it attaches to the row above. Its
+Constant/Start holds an \textbf{expression} with \code{[\%]} standing for the
+mother's current value. Operators \code{+ - * / \textasciicircum} and
+functions \code{sin cos tan exp log log10 sqrt abs} (and \code{pi},
+\code{e}) are available.
+
+\begin{gridex}{Example --- symmetric split gates (gate2 = -gate1)}
+Row 1\ \ gate1\_setvoltage\ \ Start -2\ Final 2\ Steps 41\ IntTime 0.3s\ \ (mother)\\
+Row 2\ \ \ \ gate2\_setvoltage\ Start [\%]*-1\ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ (follower)
+\end{gridex}
+
+\noindent At the step where \code{gate1}\,=\,+0.5\,V, \code{gate2} is written
+to $-0.5$\,V before the reading. A follower can itself use a ramp/verify
+method and a nonlinear expression:
+
+\begin{gridex}{Example --- heater tracking a time index nonlinearly}
+Row 1\ \ control\_counter\ \ \ \ \ Steps 50\ IntTime 1s\ \ (mother)\\
+Row 2\ \ \ \ heater\_setpower\ \ Start 0.5*sin([\%]/8)\textasciicircum 2\ \ (follower)
+\end{gridex}
+
+\begin{tip}
+A follower's Final, Steps, and Integration Time are driven by the mother, so
+they're locked. Its Constant/Start (the expression) is \emph{required} --- an
+empty one turns red.
+\end{tip}
+
+% ======================================================================
+\section{What combines with what}
+
+Mother rows and nesting parents must have a value to sweep; the
+value-less row types (while, script, pause/prompt/stop) can only sit as
+plain standalone rows. Nesting and linking never combine on the same row.
+Everything below is enforced both in the menus (grayed out) and at run time.
+
+\begin{center}\small
+\begin{tabular}{@{}p{4.5cm}*{5}{>{\centering\arraybackslash}p{1.55cm}}@{}}
+\toprule
+\textbf{Row type} & \textbf{Nest parent} & \textbf{Nest child} &
+  \textbf{Max depth} & \textbf{Link mother} & \textbf{Link follower} \\
+\midrule
+Device write (Steps $\geq$ 1) & \checkmark & \checkmark & 4 & \checkmark & \checkmark \\
+\code{control\_counter}       & \checkmark & \checkmark & 4 & \checkmark & $\times$ \\
+Virtual while-loop            & $\times$   & $\times$   & --- & $\times$ & $\times$ \\
+\code{script\_*}              & $\times$   & $\times$   & --- & $\times$ & $\times$ \\
+\code{pause}/\code{userprompt}/\code{stop} & $\times$ & $\times$ & --- & $\times$ & $\times$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The value-less rows compose by \emph{sequence}, not structure ---
+just put them one after another as ordinary rows:
+
+\begin{gridex}{Example --- gate a nested sweep behind a hardware wait}
+Row 1\ \ magnet\_setfield\ \ \ \ \ Start 1\ \ (method verify: waits for readback = 1 T)\\
+Row 2\ \ control\_waitforhold\ \ (while: magnet\_status = HOLD, timeout 600s)\\
+Row 3\ \ control\_counter\ \ \ \ \ Steps 100\ IntTime 10s\\
+Row 4\ \ \ \ gate1\_setvoltage\ Start -2\ Final 2\ Steps 21\ IntTime 0.2s\ \ (nested)\\
+Row 5\ \ script\_saveplot
+\end{gridex}
+
+% ======================================================================
+\section{Virtual while-loops}\label{sec:while}
+
+A while-loop is a \code{control} command that repeats until a condition on
+some reading is met, then continues --- like verify, but as its own row that
+also \emph{records data every poll}. Right-click \code{control}
+$\rightarrow$ \textbf{Add Virtual While\ldots}, pick a query to watch (from
+any device), an operator (\code{= != < >}), a value, and a timeout
+(mandatory; \code{0} = wait forever). Drop it in the grid; its Integration
+Time becomes the poll interval (minimum 0.1\,s).
+
+\begin{gridex}{Example --- wait for base temperature, logging as it goes}
+Definition:\ watch cryostat\_temperature, operator <, value 0.05, timeout 0\\
+Grid row:\ \ \ control\_waitforbase\ \ \ IntTime 5s
+\end{gridex}
+
+\noindent Every 5\,s it reads the temperature (and all other active
+queries, saved to the data file) and exits once it drops below 50\,mK.
+
+\begin{warn}
+Any while-loop failure --- timeout reached, a non-numeric reading against
+\code{<}/\code{>}, the watched device switched off --- \textbf{aborts the whole
+run} (with magnet onhold), by design: the row exists to gate progress on real
+hardware state, so if it fails, later rows would run under unknown conditions.
+\end{warn}
+
+% ======================================================================
+\section{Running, simulating, saving}
+
+\textbf{Start} runs the list; \textbf{Stop} aborts (holding magnet devices).
+\textbf{Simulate} walks the list and prints, in plain language, what each row
+would do --- sweep ranges, nesting/linking with computed follower values,
+while conditions --- \emph{without touching hardware}. It applies the same
+rules as a real run, so it also flags invalid combinations. Use it to sanity
+-check a list before a long run; it's optional, not required. \textbf{Save} /
+\textbf{Load} store and restore a task list. Each sweep writes its own data
+file, which the Graph window plots live.
+
+
+
+
+\end{document}

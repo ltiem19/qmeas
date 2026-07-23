@@ -1,0 +1,6 @@
+True|fieldvalue|q|1|FIELD?|1|1|0|free|free|free|free|none=none
+False|onhold|wf|0|FHOLD|None|0|0|0=0=0|free|free|free|none=none|none|none|0||600|0
+FALSE|fieldstatus|q|1|FSTATE?|1|1|0|free|free|free|free|none=none
+False|stepfield|wf|1|FIELD [%], 30|-2=6|0|0|0=0=0|free|free|free|none=none|verify|fieldstatus|0|Holding (driven)|0|0
+True|readtemp|q|1|TEMP?|1|1|0|free|free|free|free|none=none
+False|settemperature|wf|1|TEMP [%],2|-2=6|0|0|0=0=0|free|free|free|none=none|none|none|0||600|0

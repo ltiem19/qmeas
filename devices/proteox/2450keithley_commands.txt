@@ -1,0 +1,5 @@
+True|openoutput|wf|0|:OUTP ON|None|0|0|0=0=0|free|free|free|none=none
+True|readcurr|q|1|:MEASure:CURRent?|1|1|0|free|free|free|free|none=none
+True|readvolt|q|1|:MEASure:VOLTage?|1|1|0|free|free|free|free|none=none
+False|setvoltage|wf|1|:SOUR:VOLT [%];|-2=6|0|0|0=0=0|free|free|free|none=none|ramp|readvolt|0.02|
+True|voltagerange|wf|2|:SOUR:VOLT:RANG [%]|-3=0|0|0|0=0=0|free|free|free|none=none

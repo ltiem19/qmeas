@@ -1,0 +1,5 @@
+True|oscillator|wf|2|SLVL [%]|-2=6|0|0|0=0=0|free|free|free|0.004=5
+True|readvalues|q|1|SNAP? 0,1|1|1|1|,|free|free|free|none=none
+True|setsens|wf|2|SCAL [%]|-3=0|0|0|0=0=0|free|free|free|0=none
+True|timeconstant1s|wf|0|OFLT 12|None|0|0|0=0=0|free|free|free|none=none
+True|timeconstant300ms|wf|0|OFLT 11|None|0|0|0=0=0|free|free|free|none=none

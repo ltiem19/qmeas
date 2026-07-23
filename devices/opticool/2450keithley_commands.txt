@@ -1,0 +1,6 @@
+False|openoutput|wf|0|:OUTP ON|None|0|0|0=0=0|free|free|free|none=none|none|none|0|
+True|readcurr|q|1|:MEAS:CURR?|1|1|0|free|free|free|free|none=none
+False|setvoltage|wf|1|:SOUR:VOLT [%];|-2=6|0|0|0=0=0|free|free|free|none=none|ramp|readvolt|0.01||600|0
+False|voltagerange|wf|1|:SOUR:VOLT:RANG [%]|-3=0|0|0|0=0=0|free|free|free|none=none|0|none
+True|readvolt|q|1|:MEAS:VOLT?|1|1|0|free|free|free|free|none=none
+

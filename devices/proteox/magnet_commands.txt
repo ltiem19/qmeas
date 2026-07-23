@@ -1,0 +1,8 @@
+True|fieldvalue|q|1|READ:DEV:GRPZ:PSU:SIG:FLD?|1|3|2|27|end-1|free|free|none=none
+True|onhold|wf|0|SET:DEV:GRPZ:PSU:ACTN:HOLD|None|0|0|0=0=0|free|free|free|none=none
+True|ramptosetpoint|wf|0|SET:DEV:GRPZ:PSU:ACTN:RTOS|None|3|0|0=0=0|free|free|free|none=none
+False|stepfield|wf|1|SET:DEV:GRPZ:PSU:SIG:FSET:[%]&&SET:DEV:GRPZ:PSU:ACTN:RTOS|-2=6|0|0|0=0=0|free|free|free|none=none|verify|status|0|HOLD
+True|sweeprate|wf|2|SET:DEV:GRPZ:PSU:SIG:RFST:[%]|-2=6|0|0|0=0=0|free|free|free|0.0001=0.3
+FALSE|status|q|1|READ:DEV:GRPZ:PSU:ACTN?|1|1|2|24|27|free|free|none=none
+False|sweep|wf|1|SET:DEV:GRPZ:PSU:SIG:FSET:[%]|-2=6|0|0|0=0=0|free|free|free|none=none|none|none|0|
+
