@@ -8651,6 +8651,22 @@ class TasksPanel(wx.Panel):
         fields = _find_command_fields(stem, device_name, command_name)
         if fields is None:
             raise RuntimeError('command definition not found')
+        if device_name == STANDARD_DEVICE_NAME and command_name == 'pause':
+            # Mirror execution exactly (TaskRunnerThread's pause branch):
+            # the value is a DURATION — bare seconds or '30s'/'5m'/'2h',
+            # via the same _parse_duration_seconds; blank defaults to
+            # 1 s; Final/Steps are ignored, just as the run ignores
+            # them. Previously this fell through to the generic [%]
+            # path, whose float() rejected '1m' — Simulate refusing
+            # what the run accepts.
+            try:
+                duration = (_parse_duration_seconds(start_str)
+                            if start_str.strip() else 1.0)
+            except ValueError:
+                raise RuntimeError(
+                    f'invalid pause duration {start_str.strip()!r} — use '
+                    f"seconds or e.g. '30s', '5m', '2h'")
+            return f'pause {duration:g}s', 1
         cmdstr = fields[4]
         has_placeholder = '[%]' in cmdstr
         is_trivial_cmd = cmdstr.strip() == '[%]'   # e.g. control_counter — nothing beyond the value itself
