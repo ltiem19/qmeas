@@ -1,7 +1,3 @@
-control
-2450keithley1
-2450keithley2
-860lockin1top
-860lockin2bottom
+2450keithley
+860lockin
 magnet
-qdac2
