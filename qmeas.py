@@ -6800,6 +6800,20 @@ class TasksPanel(wx.Panel):
         self.grid.InsertRows(index, 1)
         self._blankify_row(index)
 
+    def _ensure_trailing_blank(self):
+        """Keep the LAST row always empty (the Excel phantom-row
+        pattern): with sticky wx.grid row selection there is otherwise
+        no way to get back to 'append at the bottom' once any row is
+        selected — selecting the trailing blank IS the append gesture
+        (the fill-in-place path lands the command there). Returns the
+        trailing blank's index, creating it if the last row has a
+        command."""
+        n = self.grid.GetNumberRows()
+        if n > 0 and self.grid.GetCellValue(n - 1, self.COL_CMD) == '':
+            return n - 1
+        self._insert_blank_row(n)
+        return n
+
     def _blankify_row(self, index: int):
         """Just the cell setup for 'this is a blank task row' — no
         InsertRows, so Insert Above/Below (which inserts N rows in one
@@ -7476,6 +7490,7 @@ class TasksPanel(wx.Panel):
             self.grid.DeleteRows(row, 1)
         if self.grid.GetNumberRows() == 0:
             self._insert_blank_row(0)   # same bootstrap gap as an empty grid at startup
+        self._ensure_trailing_blank()   # deleting the last row(s) must not lose it
         self.grid.ClearSelection()
         self.grid.ForceRefresh()
 
@@ -8609,6 +8624,7 @@ class TasksPanel(wx.Panel):
                 self._relock_control_row(r, r_device, r_command)
         self._revalidate_all_rows()   # a loaded file can contain the same
                                        # inconsistencies as typed input
+        self._ensure_trailing_blank()   # loaded lists get the phantom row too
         self.grid.ForceRefresh()
 
     def _on_lalm(self, event):
@@ -8991,6 +9007,24 @@ class TasksPanel(wx.Panel):
         row = sel[0]
         return row if self.grid.GetCellValue(row, self.COL_CMD) == '' else None
 
+    def _get_insert_above_row(self):
+        """If exactly ONE row is selected, it already has a command
+        (empty ones are the fill path), and it is not frozen by the
+        live run scan — return its index as the insert-above target.
+        None otherwise (no selection, MULTIPLE rows selected, or the
+        row is at/above the run frontier, i.e. currently executing,
+        already executed, or part of the claimed nest/link chain) —
+        every None falls back to plain appending at the bottom."""
+        sel = self.grid.GetSelectedRows()
+        if len(sel) != 1:
+            return None
+        row = sel[0]
+        if self.grid.GetCellValue(row, self.COL_CMD) == '':
+            return None
+        if self._row_frozen(row):
+            return None
+        return row
+
     def _apply_control_field_locks(self, row, device, command):
         """control_userprompt/control_stop take no value at all: lock
         Constant/Start, Final, Steps, Integration Time. control_pause
@@ -9090,21 +9124,54 @@ class TasksPanel(wx.Panel):
             # linked) are left exactly as they were. That's the point:
             # build the structure with empty rows first, populate
             # commands after.
+            was_last = (target == self.grid.GetNumberRows() - 1)
             self.grid.SetCellValue(target, self.COL_CMD, f'{device}_{command}')
             self._apply_control_field_locks(target, device, command)
             self._validate_row_fields(target)   # values may pre-exist in the placeholder
+            if was_last:
+                # The trailing blank was just consumed: recreate it and
+                # WALK THE SELECTION DOWN onto the new blank, so
+                # repeated double-clicks build the list top-to-bottom
+                # (selection staying put would make the next command
+                # insert ABOVE this one — list built in reverse).
+                blank = self._ensure_trailing_blank()
+                self.grid.ClearSelection()
+                self.grid.SelectRow(blank)
+            self.grid.ForceRefresh()
+            return
+        insert_at = self._get_insert_above_row()
+        if insert_at is not None:
+            # Exactly one (non-empty, non-frozen) row selected: insert
+            # the new command ABOVE it instead of appending. Safe
+            # mid-run for the same reason _on_insert_rows is: the
+            # frontier guard (checked in _get_insert_above_row) refuses
+            # rows at/above the live scan — and because a nested/linked
+            # chain is claimed whole the moment it starts (see
+            # _fetch_row_state_for_thread and the chain fetch), 'below
+            # the frontier' can never land inside the executing group.
+            # New row is flat (depth 0, unlinked), same as every other
+            # insert path; restructuring around it is the user's call.
+            self.grid.InsertRows(insert_at, 1)
+            self._blankify_row(insert_at)
+            self.grid.SetCellValue(insert_at, self.COL_CMD, f'{device}_{command}')
+            self._apply_control_field_locks(insert_at, device, command)
             self.grid.ForceRefresh()
             return
         # Alias naming matches v1's all_commands convention: "{device}_{command}".
-        row = self.grid.GetNumberRows()
-        self.grid.AppendRows(1)
-        self.grid.SetCellValue(row, self.COL_ON, '0')
-        self.grid.SetReadOnly(row, self.COL_ON, True)
-        self.grid.SetCellValue(row, self.COL_STRUCT, '0:')
+        # Land in the trailing blank when it exists and isn't frozen;
+        # otherwise genuinely append (e.g. mid-run with the blank
+        # already claimed by the scan — the new row past the frontier is
+        # always safe). Either way the trailing-blank invariant is
+        # restored afterwards.
+        row = self.grid.GetNumberRows() - 1
+        if not (row >= 0 and self.grid.GetCellValue(row, self.COL_CMD) == ''
+                and not self._row_frozen(row)):
+            row = self.grid.GetNumberRows()
+            self.grid.AppendRows(1)
+            self._blankify_row(row)
         self.grid.SetCellValue(row, self.COL_CMD, f'{device}_{command}')
-        self.grid.SetReadOnly(row, self.COL_CMD, True)
-        self.grid.SetCellValue(row, self.COL_COMPLETED, '0')
         self._apply_control_field_locks(row, device, command)
+        self._ensure_trailing_blank()
 
     def on_device_toggled(self, device_name: str, is_on: bool):
         """Called from DevicesPanel when a device's LED is clicked. Now
