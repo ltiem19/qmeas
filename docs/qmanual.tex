@@ -191,11 +191,18 @@ python --version
 \subsection{Step 2 --- Python packages}
 
 qmeas depends on three third-party packages; everything else it uses is in
-Python's standard library. Install them with pip:
+Python's standard library. Install them with pip \emph{through the launcher}:
 
 \begin{cmd}
-pip install wxpython matplotlib pyvisa pyvisa-py
+py -m pip install wxpython matplotlib pyvisa pyvisa-py
 \end{cmd}
+
+Always use \code{py -m pip}, not bare \code{pip}, and launch qmeas with
+\code{py}: the two then use the \emph{same} Python. On machines with several
+Pythons (Anaconda, old installs), bare \code{pip} and \code{py} can point at
+different interpreters --- the classic symptom is
+\code{ModuleNotFoundError: No module named 'wx'} at startup even though the
+install ``worked''.
 
 What each is for:
 
@@ -479,7 +486,7 @@ To qmeas, the result is an ordinary raw-socket device.
 \begin{enumerate}
   \item MultiVu running, as always.
   \item Install Quantum Design's Python package and start its server next to
-  MultiVu: \code{pip install MultiPyVu} then \code{python -m MultiPyVu}.
+  MultiVu: \code{py -m pip install MultiPyVu} then \code{py -m MultiPyVu}.
   \item Start the bridge: \code{py opticool.py} (from the \code{qbridge/}
   folder; listens on port 5100). Set both to auto-start with Windows so you
   never think about them again.
@@ -530,7 +537,7 @@ Two OptiCool adapter variants ship, serving identical commands:
 \code{opticool.py} (via Quantum Design's MultiPyVu --- preferred, but needs
 current OptiCool software) and \code{opticool\_qdi.py} (via the QDInstrument
 .NET server on port 11000, the LabVIEW interface --- works on older software,
-can run on the qmeas PC itself, needs \code{pip install pythonnet} and
+can run on the qmeas PC itself, needs \code{py -m pip install pythonnet} and
 \code{QDInstrument.dll} beside it). Only the bridge changes; qmeas
 configuration is the same for both. State strings differ between the two ---
 always Query Once before using one as a verify target.
@@ -541,7 +548,7 @@ controllers (TeraScan): their command line is session-oriented (telnet banner
 plus an access-level handshake), so the bridge holds one SDK session and
 exposes the whole DeCoF parameter tree generically --- qmeas command strings
 \code{GET <param>}, \code{SET <param> [\%]}, \code{EXEC <cmd>} reach any
-parameter without adapter changes (\code{pip install toptica\_lasersdk}; run
+parameter without adapter changes (\code{py -m pip install toptica\_lasersdk}; run
 \code{py toptica\_bridge.py --toptica-host <ip>}). Verified TeraScan (DLC
 smart THz) commands, units GHz:
 
