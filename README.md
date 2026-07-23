@@ -37,9 +37,10 @@ as it is measured and plotted live.
 - Windows 10/11 (primary target; the code is largely cross-platform but only
   Windows is routinely tested)
 - Python 3.11+ (3.13 recommended)
-- `pip install wxPython pyvisa matplotlib`
-  - For GPIB/USB instruments additionally a VISA backend (NI-VISA, or
-    `pip install pyvisa-py`)
+- `pip install wxPython matplotlib pyvisa pyvisa-py`
+  - `pyvisa-py` is the VISA backend for network/serial instruments; for
+    GPIB instruments install NI-VISA as well (pyvisa-py does not cover
+    GPIB on Windows)
 - Optional, for the AI assistant: [Ollama](https://ollama.com) and
   `ollama pull llama3.1:8b`
 - Optional, per bridge: see the header of the adapter in `qbridge/`

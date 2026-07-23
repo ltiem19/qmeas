@@ -1,8 +1,8 @@
 wxPython>=4.2
-pyvisa>=1.13
 matplotlib>=3.7
-# Optional backends / bridge dependencies (install where needed):
-#   pyvisa-py          - VISA backend without NI-VISA
+pyvisa>=1.13
+pyvisa-py>=0.7
+# Optional bridge dependencies (install where needed):
 #   pythonnet          - qbridge/opticool_qdi.py (QDInstrument .NET)
 #   MultiPyVu          - qbridge/opticool.py (MultiPyVu variant)
 #   toptica_lasersdk   - qbridge/toptica_bridge.py
