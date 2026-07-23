@@ -178,14 +178,17 @@ functional without it.
 \subsection{Step 1 --- Python}
 
 Install \textbf{Python 3.11 or newer} (64-bit) from
-\href{https://www.python.org/downloads/}{python.org}. During the installer,
-tick \textbf{``Add Python to PATH''} --- if you miss it, the \code{python} and
-\code{pip} commands below won't be found.
+\href{https://www.python.org/downloads/}{python.org}. The python.org
+installer also installs the \textbf{Windows Python launcher} \code{py},
+which every command in this manual uses --- it finds the right Python via
+the registry, so it works even when \code{python} on PATH points at another
+installation (Anaconda, an old version) or at nothing. (Ticking ``Add Python
+to PATH'' during install is still fine, just no longer load-bearing.)
 
 Confirm it in a \emph{new} PowerShell or Command Prompt window:
 
 \begin{cmd}
-python --version
+py --version
 \end{cmd}
 
 \subsection{Step 2 --- Python packages}
@@ -238,7 +241,7 @@ Put the qmeas files (\code{qmeas.py} and its companion modules, the
 open a terminal there, and run:
 
 \begin{cmd}
-python qmeas.py
+py qmeas.py
 \end{cmd}
 
 That's the whole measurement install. The next section is only needed for
