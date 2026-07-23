@@ -1,6 +1,6 @@
 False|fieldvalue|q|1|{"id":"1","method":"read","params":["sample_magnet.tesla"],"jsonrpc":"2.0"}|1|1|6|result.Message|free|free|free|none=none
 False|setpointvalue|q|1|{"id":"1","method":"read","params":["sample_magnet.setpoint"],"jsonrpc":"2.0"}|1|1|6|result.Message|free|free|free|none=none
-False|stableflag|q|1|{"id":"1","method":"read","params":["sample_magnet.stable"],"jsonrpc":"2.0"}|1|1|6|result.Message|free|free|free|none=none
+FALSE|stableflag|q|1|{"id":"1","method":"read","params":["sample_magnet.stable"],"jsonrpc":"2.0"}|1|1|6|result.Message|free|free|free|none=none
 False|setfield|wf|1|{"id":"1","method":"call","params":{"key":"sample_magnet.start","target":null,"setpoint":[%],"ramp":0.1},"jsonrpc":"2.0"}|-2=6|0|0|0=0=0|free|free|free|none=none|verify|stableflag|0|true|20000
 False|setfieldnowait|wf|1|{"id":"1","method":"call","params":{"key":"sample_magnet.start","target":null,"setpoint":[%],"ramp":0.1},"jsonrpc":"2.0"}|-2=6|0|0|0=0=0|free|free|free|none=none|none|none|0|
 False|onhold|wf|0|{"id":"1","method":"call","params":{"key":"sample_magnet.stop"},"jsonrpc":"2.0"}|None|0|0|0=0=0|free|free|free|none=none|none|none|0|
