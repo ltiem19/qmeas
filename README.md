@@ -37,7 +37,10 @@ as it is measured and plotted live.
 - Windows 10/11 (primary target; the code is largely cross-platform but only
   Windows is routinely tested)
 - Python 3.11+ (3.13 recommended)
-- `pip install wxPython matplotlib pyvisa pyvisa-py`
+- `py -m pip install wxPython matplotlib pyvisa pyvisa-py`
+  - use `py -m pip` (not bare `pip`), so the packages land in the same
+    Python that `py` launches — mixing them is the classic
+    "No module named 'wx'" on machines with several Pythons
   - `pyvisa-py` is the VISA backend for network/serial instruments; for
     GPIB instruments install NI-VISA as well (pyvisa-py does not cover
     GPIB on Windows)
