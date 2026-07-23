@@ -225,14 +225,14 @@ What each is for:
 \end{tabular}
 \end{center}
 
-\begin{tip}
-\textbf{GPIB or USB instruments} additionally need a vendor VISA library ---
-in practice \textbf{NI-VISA} (free from ni.com). The pure-Python
-\code{pyvisa-py} backend handles TCPIP/socket devices but \emph{not} GPIB or
-USB. If qmeas can't load a vendor library it falls back to \code{pyvisa-py}
-automatically and warns you once; TCPIP instruments keep working, GPIB/USB
-won't until NI-VISA is installed.
-\end{tip}
+\begin{warn}
+\textbf{GPIB or USB instruments will not work until you additionally install
+the NI-VISA library
+(\href{https://www.ni.com/en/support/downloads/drivers/download.ni-visa.html}{download
+from ni.com}).} The pure-Python \code{pyvisa-py} backend only handles
+TCPIP/socket devices but not GPIB or USB! If qmeas can't load a vendor
+library, it falls back to \code{pyvisa-py} automatically and warns you once.
+\end{warn}
 
 \subsection{Step 3 --- Run qmeas}
 
