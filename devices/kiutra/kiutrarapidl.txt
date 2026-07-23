@@ -1,4 +1,0 @@
-HTTP::192.168.11.20::1006::/::application/json-rpc
-2
-2
-5000
