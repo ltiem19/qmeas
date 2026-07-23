@@ -1,0 +1,4 @@
+True|userprompt|wf|0|0|-1=0|0|free|free|free|free|free|free
+True|stop|wf|0|0|-1=0|0|free|free|free|free|free|free
+True|pause|wf|1|[%]|-1=0|0|free|free|free|free|free|free
+True|counter|wf|2|[%]|-1=12|0|free|-2=6|free|free|free|free
