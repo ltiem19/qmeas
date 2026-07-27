@@ -78,6 +78,7 @@ from pathlib import Path
 import http.client
 import json
 import math
+import os
 import re
 import socket
 import threading
@@ -2921,6 +2922,7 @@ class TaskRunnerThread(threading.Thread):
         step_failed = None
         last_live_push = 0.0
         LIVE_PUSH_INTERVAL = 0.5   # seconds — throttled so a fast sweep
+        fstate = {'filepath': None, 'last': 0.0, 'warned': False}   # partial-flush state
                                    # (short IntTime, or none) doesn't flood
                                    # the main thread with redraw requests
         for step_number, target_value in enumerate(sweep_values):
@@ -3025,6 +3027,7 @@ class TaskRunnerThread(threading.Thread):
                 row_values = (row_values + [float('nan')] * len(headers))[:len(headers)]
 
             data_rows.append(row_values)
+            self._flush_datafile_partial(headers, data_rows, fstate)
             wx.CallAfter(self.panel._sweep_ui_progress, step_number + 1)
 
             now = time.time()
@@ -3041,9 +3044,9 @@ class TaskRunnerThread(threading.Thread):
                 + [f'{d}_{c}' for d, c in self.query_specs]
 
         row_finish = time.strftime('%Y-%m-%d %H:%M:%S')
-        filepath = None
+        filepath = fstate['filepath']   # partial flushes already own a file
         try:
-            filepath = self._write_sweep_datafile(headers, data_rows)
+            filepath = self._write_sweep_datafile(headers, data_rows, filepath)
         except Exception as e:
             wx.CallAfter(self.panel.on_log, f'Sweep data file FAILED to write: {e}\n\n')
 
@@ -3266,6 +3269,7 @@ class TaskRunnerThread(threading.Thread):
         read_attempts = 0
         last_live_push = 0.0
         LIVE_PUSH_INTERVAL = 0.5
+        fstate = {'filepath': None, 'last': 0.0, 'warned': False}   # partial-flush state
         outcome, fail_reason = None, None
         try:
             while True:
@@ -3323,6 +3327,7 @@ class TaskRunnerThread(threading.Thread):
                 elif len(row_values) != len(headers):
                     row_values = (row_values + [float('nan')] * len(headers))[:len(headers)]
                 data_rows.append(row_values)
+                self._flush_datafile_partial(headers, data_rows, fstate)
                 now = time.time()
                 if now - last_live_push >= LIVE_PUSH_INTERVAL or polls == 1:
                     wx.CallAfter(self.panel._on_sweep_progress, list(headers), data_rows[:])
@@ -3352,9 +3357,9 @@ class TaskRunnerThread(threading.Thread):
                 + [f'{d}_{c}' for d, c in self.query_specs]
 
         row_finish = time.strftime('%Y-%m-%d %H:%M:%S')
-        filepath = None
+        filepath = fstate['filepath']   # partial flushes already own a file
         try:
-            filepath = self._write_sweep_datafile(headers, data_rows)
+            filepath = self._write_sweep_datafile(headers, data_rows, filepath)
         except Exception as e:
             wx.CallAfter(self.panel.on_log, f'While data file FAILED to write: {e}\n\n')
         wx.CallAfter(self.panel._on_sweep_done, headers, data_rows, filepath)
@@ -3521,6 +3526,7 @@ class TaskRunnerThread(threading.Thread):
 
         state = {
             'headers': None, 'data_rows': [], 't0': time.time(),
+            'fstate': {'filepath': None, 'last': 0.0, 'warned': False},
             'aborted': False, 'failed': None,
             'measurements_done': 0, 'last_live_push': 0.0,
             'level_names': level_names, 'total': total_measurements,
@@ -3534,10 +3540,11 @@ class TaskRunnerThread(threading.Thread):
         wx.CallAfter(self.panel._sweep_ui_stop)
 
         row_finish = time.strftime('%Y-%m-%d %H:%M:%S')
-        filepath = None
+        filepath = state['fstate']['filepath']   # partial flushes already own a file
         try:
             if state['headers'] is not None:
-                filepath = self._write_sweep_datafile(state['headers'], state['data_rows'])
+                filepath = self._write_sweep_datafile(state['headers'],
+                                                      state['data_rows'], filepath)
         except Exception as e:
             wx.CallAfter(self.panel.on_log, f'Nested sweep data file FAILED to write: {e}\n\n')
 
@@ -3705,6 +3712,8 @@ class TaskRunnerThread(threading.Thread):
             row_values = (row_values + [float('nan')] * len(state['headers']))[:len(state['headers'])]
 
         state['data_rows'].append(row_values)
+        self._flush_datafile_partial(state['headers'], state['data_rows'],
+                                     state['fstate'])
         state['measurements_done'] += 1
         wx.CallAfter(self.panel._sweep_ui_progress, state['measurements_done'])
 
@@ -3713,27 +3722,68 @@ class TaskRunnerThread(threading.Thread):
             wx.CallAfter(self.panel._on_sweep_progress, list(state['headers']), state['data_rows'][:])
             state['last_live_push'] = now
 
-    def _write_sweep_datafile(self, headers: list, data_rows: list):
-        """One dump at the end, not incremental writes — matches what
-        was asked for. Trade-off worth knowing: an app crash mid-run
-        loses everything collected so far, since nothing hits disk until
-        this call. Fine for now; say if you want incremental appends
-        instead. Filename matches v1's date_time.dat convention, plus
-        the existing file_suffix setting (already meant for exactly
-        this — 'appended to every file from the same measurement run').
-        Used by both control_counter and a real device's Steps>=1
-        sweep — the file format doesn't care which produced it."""
-        settings = load_settings()
-        data_dir = Path(settings['data_path'])
-        data_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = time.strftime('%Y%m%d_%H%M%S')
-        suffix = settings.get('file_suffix', '')
-        filepath = data_dir / f'{timestamp}{suffix}.dat'
-        with open(filepath, 'w', encoding='ascii', errors='replace') as f:
+    # Crash-proofing (user lost a 2 h while-loop to a GUI freeze +
+    # forced close, because nothing hit disk until the end): every
+    # recording loop now flushes the growing table to the SAME file at
+    # most every _PARTIAL_FLUSH_INTERVAL_S. A crash/kill costs at most
+    # that many seconds of data. Full rewrite each time (7200 rows is
+    # sub-ms) via a temp file + os.replace, so a crash mid-write can
+    # never leave a torn file — the previous complete flush survives.
+    _PARTIAL_FLUSH_INTERVAL_S = 5.0
+
+    def _write_sweep_datafile(self, headers: list, data_rows: list,
+                              filepath=None):
+        """Write the sweep table. filepath=None (the end-of-sweep call
+        with no prior flush) creates a fresh timestamped file matching
+        v1's date_time.dat convention + the file_suffix setting; a
+        given filepath is REUSED, which is how the periodic partial
+        flush and the final write end up in one file. Atomic
+        (tmp + os.replace): readers and crashes only ever see a
+        complete file. Used by counter/sweep, while, and nested-chain
+        recording — the format doesn't care which produced it."""
+        if filepath is None:
+            settings = load_settings()
+            data_dir = Path(settings['data_path'])
+            data_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = time.strftime('%Y%m%d_%H%M%S')
+            suffix = settings.get('file_suffix', '')
+            filepath = data_dir / f'{timestamp}{suffix}.dat'
+            n = 2
+            while filepath.exists():
+                # Two sweeps finishing within the same second used to
+                # get the SAME name — the second silently overwrote the
+                # first (latent data-loss bug exposed by the flush
+                # tests). Uniquify instead.
+                filepath = data_dir / f'{timestamp}{suffix}_{n}.dat'
+                n += 1
+        tmp = Path(str(filepath) + '.tmp')
+        with open(tmp, 'w', encoding='ascii', errors='replace') as f:
             f.write('\t'.join(headers) + '\n')
             for row_values in data_rows:
                 f.write('\t'.join(str(v) for v in row_values) + '\n')
+        os.replace(tmp, filepath)
         return filepath
+
+    def _flush_datafile_partial(self, headers, data_rows, fstate):
+        """Throttled crash-safety flush, called after every recorded
+        row. fstate is a per-sweep dict ({'filepath': None, 'last': 0.0,
+        'warned': False}); the first flush creates the file, later
+        flushes and the final _write_sweep_datafile reuse it. A write
+        error is logged ONCE per sweep and never interrupts the
+        measurement — recording in memory continues regardless."""
+        now = time.time()
+        if now - fstate['last'] < self._PARTIAL_FLUSH_INTERVAL_S:
+            return
+        fstate['last'] = now
+        try:
+            fstate['filepath'] = self._write_sweep_datafile(
+                headers, data_rows, fstate['filepath'])
+        except Exception as e:
+            if not fstate['warned']:
+                fstate['warned'] = True
+                wx.CallAfter(self.panel.on_log,
+                             f'Partial data flush failed (will keep '
+                             f'recording in memory): {e}\n\n')
 
     def _execute_active_queries(self, exclude: set = None, preread: dict = None) -> list:
         """Execute every entry in self.query_specs (snapshotted once at
@@ -9433,6 +9483,9 @@ class GraphWindow(wx.Frame):
     MAX_DATASETS = 4
     _COLORS = ['#1f77b4', '#d62728', '#2ca02c', '#9467bd']
 
+    MAX_2D_CELLS = 2_000_000   # ~1400x1400; far above any real nested map,
+                               # far below the 52M-cell freeze case
+
     def __init__(self, parent, get_sweep_data):
         super().__init__(parent, title=f'{APP_NAME} — Graph', size=wx.Size(950, 650))
         self.SetBackgroundColour(COLOR_APP_BG)
@@ -9678,6 +9731,14 @@ class GraphWindow(wx.Frame):
         honest 'no data here' rather than a guess."""
         x1_vals = sorted({row[x1_col] for row in self._matrix if isinstance(row[x1_col], (int, float))})
         x2_vals = sorted({row[x2_col] for row in self._matrix if isinstance(row[x2_col], (int, float))})
+        if len(x1_vals) * len(x2_vals) > self.MAX_2D_CELLS:
+            # Not grid-like data: with (near-)unique values along both
+            # X's — e.g. a while-log's measured field vs step number —
+            # the 'grid' would be len1 x len2 cells (a 2 h while row:
+            # 7200 x 7200 = 52 MILLION), whose construction froze the
+            # whole app on the GUI thread. A real nested sweep has few
+            # distinct values per axis and stays far under the cap.
+            return x1_vals, x2_vals, None
         x1_index = {v: i for i, v in enumerate(x1_vals)}
         x2_index = {v: i for i, v in enumerate(x2_vals)}
         grid = [[float('nan')] * len(x2_vals) for _ in range(len(x1_vals))]
@@ -9700,7 +9761,17 @@ class GraphWindow(wx.Frame):
             ax = self.figure.add_subplot(n, 1, i + 1)
             x1_vals, x2_vals, grid = self._build_2d_grid(x1_col, x2_col, y_col)
             y_label = _prettify_header(self._headers[y_col])
-            if len(x1_vals) < 2 or len(x2_vals) < 2:
+            if grid is None:
+                # Refused by the cell cap — see _build_2d_grid.
+                ax.set_axis_off()
+                ax.text(0.5, 0.5,
+                        f'Too many distinct values for a 2D map\n'
+                        f'({len(x1_vals)} x {len(x2_vals)} grid cells). '
+                        f'2D maps need repeated values along both axes\n'
+                        f'(e.g. a nested sweep) — uncheck one X for a line plot.',
+                        ha='center', va='center', transform=ax.transAxes,
+                        color=_wx_colour_to_hex(COLOR_TEXT_MUTED))
+            elif len(x1_vals) < 2 or len(x2_vals) < 2:
                 # Not enough distinct values along one axis to form a
                 # real 2D grid (e.g. the two X's picked don't actually
                 # form a rectangular sweep together) — say so rather
