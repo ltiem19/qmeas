@@ -3726,10 +3726,13 @@ class TaskRunnerThread(threading.Thread):
     # forced close, because nothing hit disk until the end): every
     # recording loop now flushes the growing table to the SAME file at
     # most every _PARTIAL_FLUSH_INTERVAL_S. A crash/kill costs at most
-    # that many seconds of data. Full rewrite each time (7200 rows is
-    # sub-ms) via a temp file + os.replace, so a crash mid-write can
-    # never leave a torn file — the previous complete flush survives.
-    _PARTIAL_FLUSH_INTERVAL_S = 5.0
+    # that many seconds of data. Full rewrite each time via a temp file
+    # + os.replace, so a crash mid-write can never leave a torn file —
+    # the previous complete flush survives. 30 s per user request:
+    # short runs are easily repeated; the interval matters for the
+    # long (12 h+) runs, where it bounds both the loss window and the
+    # rewrite-I/O frequency on a by-then-large table.
+    _PARTIAL_FLUSH_INTERVAL_S = 30.0
 
     def _write_sweep_datafile(self, headers: list, data_rows: list,
                               filepath=None):
