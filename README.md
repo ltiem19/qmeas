@@ -12,7 +12,7 @@ field), link rows through arithmetic expressions, gate steps on hardware
 read-back (verify), wait on conditions (while-loops), and record any set of
 readings automatically at every point. Data is written as tab-separated files
 as it is measured and plotted live.
-
+<img src="qmeas_screenshot.png" alt="qmeas" width="800" />
 ## Highlights
 
 - **Instrument-agnostic**: VISA (GPIB/USB), raw TCP sockets, and HTTP/JSON
