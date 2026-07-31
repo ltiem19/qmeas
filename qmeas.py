@@ -606,7 +606,7 @@ _WHILE_OPERATORS = ('<', '>', '=', '!=')
 # read (field 20); parsed off by _split_element_suffix at every point
 # a linked read is actually executed (_query_for_verify,
 # _query_current_value) and wherever the BARE name is needed to match
-# active-query specs (the exclude-from-data sets).
+# active-query specs.
 _ELEMENT_SUFFIX_RE = re.compile(r'^(.+?)\[(\d+)\]$')
 
 
@@ -2897,22 +2897,15 @@ class TaskRunnerThread(threading.Thread):
                 return False
 
         sweep_values = _linspace(start_val, final_val, steps_n)
-        # requirement: 'do not save the value that is used to verify. It is
-        # not needed... do not include the results of a string verify
-        # read in the data file.' The read still happens as part of
-        # verify itself (_verify_equals above) — this only stops it
-        # from ALSO landing in the recorded data, which is what
-        # happens if the same command's active-query LED is also on
-        # (e.g. left on so its status is visible live during the run).
-        # Bare names (element suffix stripped): the exclude matches against
-        # active-query specs, which are always bare command names.
-        exclude_reads = ({(device_name, _split_element_suffix(linked_read)[0])}
-                         if (not is_counter and method == 'verify') else set())
-        for fol in prepared_followers:
-            # Same rule for a verify-method follower: its verify read is
-            # part of the write handshake, not recorded data.
-            if fol['method'] == 'verify':
-                exclude_reads.add((fol['device_name'], _split_element_suffix(fol['linked_read'])[0]))
+        # SPEC CHANGE (supersedes the earlier 'do not save the value
+        # that is used to verify' requirement): the LED alone decides
+        # recording — 'ONLY when the red LED is on, queries are not
+        # saved.' A query doing double duty as a verify linked read is
+        # a perfectly ordinary active query for plotting and saving;
+        # verify's own reads happen separately in _verify_equals and
+        # were never the recorded ones. If a string-status verify
+        # column (HOLD etc.) is unwanted in the data file, turn that
+        # query's LED red — same rule, no hidden coupling.
 
         wx.CallAfter(self.panel._sweep_ui_start, len(sweep_values))
         data_rows = []
@@ -2999,7 +2992,7 @@ class TaskRunnerThread(threading.Thread):
             if self._abort.is_set():
                 aborted_early = True
                 break
-            reads = self._execute_active_queries(exclude_reads)   # [(alias, value), ...]
+            reads = self._execute_active_queries()   # [(alias, value), ...]
             elapsed = time.time() - t0
             row_values = [target_value] + follower_values + [step_number, elapsed]
             for _alias, value in reads:
@@ -3016,9 +3009,11 @@ class TaskRunnerThread(threading.Thread):
                 for alias_, value in reads:
                     # alias_ is already exactly f'{device}_{command}' (see
                     # _execute_active_queries) — deriving it again via
-                    # zip(self.query_specs, reads) would misalign once
-                    # exclude_reads makes reads shorter than query_specs
-                    # (a verify-linked read removed from the middle, say).
+                    # zip(self.query_specs, reads) could misalign if the
+                    # two ever differ in length (historically the
+                    # verify-linked-read exclusion did exactly that; the
+                    # exclusion is gone — LED-only rule — but this
+                    # derivation stays correct regardless).
                     if isinstance(value, list):
                         headers.extend(f'{alias_}[{i}]' for i in range(len(value)))
                     else:
@@ -3510,13 +3505,9 @@ class TaskRunnerThread(threading.Thread):
 
         level_names = ['outer'] + [f'inner{i}' for i in range(1, len(level_specs))]
 
-        # requirement: 'do not save the value that is used to verify... do not
-        # include the results of a string verify read in the data
-        # file' — combined across every level that uses method='verify'
-        # (each level's linked read is on ITS OWN device, so no
-        # collisions between levels are possible here).
-        exclude_reads = {(spec['device_name'], _split_element_suffix(spec['linked_read'])[0]) for spec in level_specs
-                         if not spec['is_counter'] and spec['method'] == 'verify'}
+        # SPEC CHANGE (see _run_timed_sweep): the LED alone decides
+        # recording; verify linked reads are no longer excluded from
+        # the recorded data.
 
         total_measurements = 1
         for spec in level_specs:
@@ -3530,7 +3521,6 @@ class TaskRunnerThread(threading.Thread):
             'aborted': False, 'failed': None,
             'measurements_done': 0, 'last_live_push': 0.0,
             'level_names': level_names, 'total': total_measurements,
-            'exclude_reads': exclude_reads,
             'level_progress': [None] * len(level_specs),   # per-level (alias, step+1, total) — see
                                                             # _run_nested_level's _push_step_progress
         }
@@ -3680,7 +3670,7 @@ class TaskRunnerThread(threading.Thread):
         arity column discovery as the single-level sweep (a multi-value
         read explodes into real 'alias[i]' columns from its first
         actual reading, not a space-joined string)."""
-        reads = self._execute_active_queries(state.get('exclude_reads'))
+        reads = self._execute_active_queries()
         elapsed = time.time() - state['t0']
         row_values = []
         for step_number, value in path:
@@ -3700,9 +3690,9 @@ class TaskRunnerThread(threading.Thread):
             for alias_, value in reads:
                 # alias_ is already exactly f'{device}_{command}' — see
                 # the single-level sweep's identical fix for why this
-                # doesn't re-derive it via zip(self.query_specs, reads),
-                # which breaks alignment once exclude_reads makes reads
-                # shorter than query_specs.
+                # doesn't re-derive it via zip(self.query_specs, reads) —
+                # robust regardless of list lengths (the historical
+                # verify-read exclusion that motivated it is gone).
                 if isinstance(value, list):
                     headers.extend(f'{alias_}[{i}]' for i in range(len(value)))
                 else:
@@ -3788,7 +3778,7 @@ class TaskRunnerThread(threading.Thread):
                              f'Partial data flush failed (will keep '
                              f'recording in memory): {e}\n\n')
 
-    def _execute_active_queries(self, exclude: set = None, preread: dict = None) -> list:
+    def _execute_active_queries(self, preread: dict = None) -> list:
         """Execute every entry in self.query_specs (snapshotted once at
         Start — see class docstring for why this one stays a snapshot)
         and return [(alias, value_or_error_string), ...] in order.
@@ -3799,17 +3789,6 @@ class TaskRunnerThread(threading.Thread):
         timeout) is recorded as an error string inline and does NOT
         raise or abort the counter — one bad reading shouldn't cost the
         rest of the step, let alone the rest of the run.
-
-        exclude: (device_name, command_name) pairs to skip entirely —
-        used to omit a command that's ALSO configured as a verify
-        Method's linked read from the recorded data (requirement: 'do not
-        save the value that is used to verify. It is not needed... do
-        not include the results of a string verify read in the data
-        file'). The read still HAPPENS as part of verify itself
-        (_verify_equals) — this only controls whether it's ADDITIONALLY
-        recorded here as if it were ordinary measurement data, which is
-        what happens if the same command also happens to have its own
-        active-query LED on for visibility during the run.
 
         A failed read gets exactly ONE retry after
         _ACTIVE_READ_RETRY_DELAY_S before the error string is
@@ -3822,12 +3801,9 @@ class TaskRunnerThread(threading.Thread):
         data, same format as before. Same philosophy as verify's and
         the while-loop's existing read-retry budgets, scaled down to
         what a logged read warrants (it isn't gating anything)."""
-        exclude = exclude or set()
         preread = preread or {}
         results = []
         for device_name, command_name in self.query_specs:
-            if (device_name, command_name) in exclude:
-                continue
             alias = f'{device_name}_{command_name}'
             if (device_name, command_name) in preread:
                 # Already read this cycle by the caller (the while
