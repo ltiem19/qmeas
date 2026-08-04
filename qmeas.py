@@ -9471,6 +9471,10 @@ class GraphWindow(wx.Frame):
         self.get_sweep_data = get_sweep_data
         self._headers, self._matrix, self._filepath = [], [], None
         self._x_cols, self._y_cols = [], []
+        self._main_axes = []          # MAIN plot axes from the last draw (excludes 2D colorbar
+                                      # axes, unlike figure.axes) — see _capture_view
+        self._interacting = False     # True while a zoom/pan mouse drag is in progress on the canvas
+        self._redraw_pending = False  # data arrived during a drag — redraw once on release
 
         if not _HAS_MATPLOTLIB:
             panel = PlaceholderPanel(self, "Graph needs matplotlib.\n\npip install matplotlib")
@@ -9496,6 +9500,28 @@ class GraphWindow(wx.Frame):
         self.mode_overlay.Bind(wx.EVT_RADIOBUTTON, self._on_selection_changed)
         self.mode_stacked.Bind(wx.EVT_RADIOBUTTON, self._on_selection_changed)
 
+        # 2D z-scale sliders — requirement: adjust the color scale of a 2D
+        # map WHILE measuring. They hold FRACTIONS of the current data
+        # range (0-100 %), not absolute values: the data's min/max move
+        # while a run is producing points, so '100 %' keeps tracking the
+        # growing maximum instead of going stale, and the clip window is
+        # re-applied on every live redraw simply because _draw_2d reads
+        # the sliders each time it rebuilds the figure. Only shown in
+        # 2D-map mode (same toggle spot as the mode radios, in reverse).
+        # SL_LABELS shows the numeric value on the slider itself.
+        self.zmin_label = wx.StaticText(self, label='Z min (% of data range):')
+        self.zmin_slider = wx.Slider(self, value=0, minValue=0, maxValue=100,
+                                     style=wx.SL_HORIZONTAL | wx.SL_LABELS)
+        self.zmax_label = wx.StaticText(self, label='Z max (% of data range):')
+        self.zmax_slider = wx.Slider(self, value=100, minValue=0, maxValue=100,
+                                     style=wx.SL_HORIZONTAL | wx.SL_LABELS)
+        self.zmin_slider.Bind(wx.EVT_SLIDER, self._on_z_slider)
+        self.zmax_slider.Bind(wx.EVT_SLIDER, self._on_z_slider)
+        self._z_widgets = [self.zmin_label, self.zmin_slider,
+                           self.zmax_label, self.zmax_slider]
+        for w in self._z_widgets:
+            w.Show(False)
+
         btn_screenshot = wx.Button(self, label='Screenshot')
         btn_screenshot.Bind(wx.EVT_BUTTON, self._on_screenshot)
 
@@ -9503,6 +9529,21 @@ class GraphWindow(wx.Frame):
         self.canvas = FigureCanvasWxAgg(self, -1, self.figure)
         self.toolbar = _GraphToolbar(self.canvas)
         self.toolbar.Realize()
+
+        # Defer figure rebuilds while a zoom/pan drag is in progress —
+        # see _on_canvas_mouse_down. Bound AFTER FigureCanvasWxAgg's own
+        # internal bindings, so these run FIRST and Skip() hands the
+        # event on to matplotlib's handlers unchanged.
+        self.canvas.Bind(wx.EVT_LEFT_DOWN, self._on_canvas_mouse_down)
+        self.canvas.Bind(wx.EVT_RIGHT_DOWN, self._on_canvas_mouse_down)
+        # The second press of a double-click arrives as DCLICK, not
+        # DOWN — a drag started from a fast double-press must set the
+        # guard too, or a live push mid-drag slips through it.
+        self.canvas.Bind(wx.EVT_LEFT_DCLICK, self._on_canvas_mouse_down)
+        self.canvas.Bind(wx.EVT_RIGHT_DCLICK, self._on_canvas_mouse_down)
+        self.canvas.Bind(wx.EVT_LEFT_UP, self._on_canvas_mouse_up)
+        self.canvas.Bind(wx.EVT_RIGHT_UP, self._on_canvas_mouse_up)
+        self.canvas.Bind(wx.EVT_MOUSE_CAPTURE_LOST, self._on_canvas_capture_lost)
 
         left = wx.BoxSizer(wx.VERTICAL)
         left.Add(x_label, 0, wx.BOTTOM, self.FromDIP(PAD_SMALL))
@@ -9512,6 +9553,10 @@ class GraphWindow(wx.Frame):
         left.Add(self.status_label, 0, wx.EXPAND | wx.BOTTOM, self.FromDIP(PAD_LARGE))
         left.Add(self.mode_overlay, 0, wx.BOTTOM, self.FromDIP(PAD_SMALL))
         left.Add(self.mode_stacked, 0, wx.BOTTOM, self.FromDIP(PAD_LARGE))
+        left.Add(self.zmin_label, 0, wx.BOTTOM, self.FromDIP(PAD_SMALL))
+        left.Add(self.zmin_slider, 0, wx.EXPAND | wx.BOTTOM, self.FromDIP(PAD_SMALL))
+        left.Add(self.zmax_label, 0, wx.BOTTOM, self.FromDIP(PAD_SMALL))
+        left.Add(self.zmax_slider, 0, wx.EXPAND | wx.BOTTOM, self.FromDIP(PAD_LARGE))
         left.Add(btn_screenshot, 0, wx.EXPAND)
 
         right = wx.BoxSizer(wx.VERTICAL)
@@ -9561,11 +9606,17 @@ class GraphWindow(wx.Frame):
 
         headers, matrix, filepath = data['headers'], data['matrix'], data['filepath']
         same_columns = (headers == self._headers)
+        prev_filepath = self._filepath   # for the end-of-run PNG auto-save below
         self._matrix, self._filepath = matrix, filepath
 
         if same_columns:
             self._headers = headers
             self._redraw()
+            # A REAL filepath appearing where there was none (or another
+            # run's) is exactly the _on_sweep_done push — the run just
+            # finished and its .dat file now exists. Live progress
+            # pushes carry filepath=None and never trigger this.
+            self._maybe_autosave_png(prev_filepath)
             return
 
         self._headers = headers
@@ -9648,6 +9699,87 @@ class GraphWindow(wx.Frame):
         self.status_label.SetLabel('')
         self._redraw()
 
+    def _on_z_slider(self, event):
+        """Keep min STRICTLY below max by pushing the OTHER slider out
+        of the way (wx.Slider.SetValue emits no event, so no
+        recursion), then redraw with the new clip window. The
+        strictness guarantee is what lets _draw_2d hand pcolormesh a
+        vmin < vmax without any further guard of its own."""
+        zmin, zmax = self.zmin_slider.GetValue(), self.zmax_slider.GetValue()
+        if zmin >= zmax:
+            if event.GetEventObject() is self.zmin_slider:
+                if zmin >= 100:
+                    self.zmin_slider.SetValue(99)
+                self.zmax_slider.SetValue(min(100, self.zmin_slider.GetValue() + 1))
+            else:
+                if zmax <= 0:
+                    self.zmax_slider.SetValue(1)
+                self.zmin_slider.SetValue(max(0, self.zmax_slider.GetValue() - 1))
+        self._redraw()
+
+    def _on_canvas_mouse_down(self, event):
+        """A zoom-rectangle or pan drag is starting (or any plain click
+        on the canvas — harmlessly conservative, held for milliseconds).
+        Hold off rebuilding the figure until the button is released:
+        rebuilding mid-drag (figure.clear() + fresh axes on a live data
+        push) destroys the very axes the drag is operating on — the
+        interaction dies and the plot snaps back to full scale, which
+        is exactly the reported 'zoom resets if you are not quick
+        enough'."""
+        self._interacting = True
+        event.Skip()   # matplotlib's own press handler must still run
+
+    def _on_canvas_mouse_up(self, event):
+        event.Skip()   # let matplotlib COMMIT the zoom first — its
+                       # release handler runs after this one returns
+                       # (Skip passes the event on), and the deferred
+                       # redraw goes through CallAfter so it runs after
+                       # even that; _capture_view then sees the freshly
+                       # committed limits instead of the pre-drag ones.
+        self._interacting = False
+        if self._redraw_pending:
+            self._redraw_pending = False
+            wx.CallAfter(self._redraw)
+
+    def _on_canvas_capture_lost(self, event):
+        """Windows can take the mouse capture away mid-drag (task
+        switch, system popup). Without this, _interacting would stay
+        stuck True and live updates would stop for the rest of the
+        run."""
+        self._interacting = False
+        if self._redraw_pending:
+            self._redraw_pending = False
+            wx.CallAfter(self._redraw)
+        event.Skip()
+
+    def _maybe_autosave_png(self, prev_filepath):
+        """End-of-run plot auto-save (requested): when the run's real
+        data file has just appeared in the stash (filepath went from
+        None/a previous run's file to a new one), save the CURRENT plot
+        next to it under the same name with .png instead of .dat. Only
+        when something is actually selected to plot — a blank 'Select X
+        and Y' canvas isn't worth a file. Failure sets the status line
+        rather than popping a modal at the user mid-workflow: the .dat
+        is the authoritative record, the PNG a convenience copy. In the
+        rare case the run ends during a zoom drag, the figure is one
+        deferred redraw behind and the PNG is a near-final snapshot."""
+        if not _HAS_MATPLOTLIB:
+            return
+        if not self._filepath or self._filepath == prev_filepath:
+            return
+        if not self._matrix:
+            return
+        x_any = any(self.x_list.IsChecked(i) for i in range(self.x_list.GetCount()))
+        y_any = any(self.y_list.IsChecked(i) for i in range(self.y_list.GetCount()))
+        if not (x_any and y_any):
+            return
+        out_path = Path(self._filepath).with_suffix('.png')
+        try:
+            self.figure.savefig(out_path, dpi=150)
+            self.status_label.SetLabel(f'Plot saved: {out_path.name}')
+        except Exception as e:
+            self.status_label.SetLabel(f'Plot auto-save failed: {e}')
+
     @staticmethod
     def _to_plot_float(v):
         """A cell that isn't already numeric (a query's error string —
@@ -9660,6 +9792,13 @@ class GraphWindow(wx.Frame):
         return v if isinstance(v, (int, float)) else float('nan')
 
     def _redraw(self):
+        if self._interacting:
+            # Mid zoom/pan drag — rebuilding the figure now would
+            # destroy the axes under the user's cursor (see
+            # _on_canvas_mouse_down). Remember that a redraw is owed
+            # and do it once on mouse release.
+            self._redraw_pending = True
+            return
         if not _HAS_MATPLOTLIB or not self._matrix:
             self._draw_empty()
             return
@@ -9677,6 +9816,8 @@ class GraphWindow(wx.Frame):
         # 'overlay' equivalent makes sense for stacking color maps).
         self.mode_overlay.Show(not is_2d)
         self.mode_stacked.Show(not is_2d)
+        for w in self._z_widgets:
+            w.Show(is_2d)   # z-scale sliders only mean anything for a color map
         self.Layout()
 
         saved_view = self._capture_view()
@@ -9691,6 +9832,7 @@ class GraphWindow(wx.Frame):
                 axes = self._draw_overlay(x_data, x_col, y_cols)
             else:
                 axes = self._draw_stacked(x_data, x_col, y_cols)
+        self._main_axes = axes   # MAIN axes only (no colorbars) — the capture basis
         self._apply_view(saved_view, axes)
         self.figure.tight_layout()
         self._force_repaint()
@@ -9759,7 +9901,27 @@ class GraphWindow(wx.Frame):
                 ax.text(0.5, 0.5, f"Not enough distinct values for a 2D grid\n({x1_label} x {x2_label})",
                        ha='center', va='center', transform=ax.transAxes, color=_wx_colour_to_hex(COLOR_TEXT_MUTED))
             else:
-                mesh = ax.pcolormesh(x2_vals, x1_vals, grid, shading='auto')
+                # Z clip window from the sliders, as FRACTIONS of THIS
+                # grid's own finite data range — recomputed every
+                # redraw, so during a live run '100 %' keeps tracking
+                # the growing maximum (see the slider creation comment).
+                # fmin < fmax is guaranteed strictly by _on_z_slider;
+                # both at the endpoints (the default) or a degenerate
+                # data range (all-equal, all-NaN) falls back to
+                # pcolormesh's own autoscaling via vmin=vmax=None.
+                fmin = self.zmin_slider.GetValue() / 100.0
+                fmax = self.zmax_slider.GetValue() / 100.0
+                vmin = vmax = None
+                if fmin > 0.0 or fmax < 1.0:
+                    finite = [v for grid_row in grid
+                              for v in grid_row if math.isfinite(v)]
+                    if finite:
+                        dmin, dmax = min(finite), max(finite)
+                        if dmax > dmin:
+                            vmin = dmin + fmin * (dmax - dmin)
+                            vmax = dmin + fmax * (dmax - dmin)
+                mesh = ax.pcolormesh(x2_vals, x1_vals, grid, shading='auto',
+                                     vmin=vmin, vmax=vmax)
                 self.figure.colorbar(mesh, ax=ax, label=y_label)
                 ax.set_xlabel(x2_label)
                 ax.set_ylabel(x1_label)
@@ -9779,15 +9941,37 @@ class GraphWindow(wx.Frame):
         autoscale is still on) — the caller should just let the new
         plot autoscale normally in that case, which is what makes a
         live-growing plot keep expanding to show new data by default,
-        right up until the user actually touches zoom/pan."""
-        if not self.figure.axes:
+        right up until the user actually touches zoom/pan.
+
+        Per-MAIN-axis now (self._main_axes, the list the last draw
+        returned), for two concrete reasons over the original
+        axes[0]-only version:
+        1. In 2D mode figure.axes ALSO contains the colorbar axes, so
+           the captured axis count never matched the main-axes list
+           _apply_view gets — zoom preservation silently never worked
+           for 2D maps at all.
+        2. An axis is preserved only if ITS OWN autoscale was turned
+           off (2D subplots don't share x, so zooming one says nothing
+           about the others; shared-x siblings in 1D modes get their
+           flag flipped by matplotlib's own sharing propagation and
+           are still captured together, unchanged in effect) — and
+           only the zoomed axes get frozen, so untouched siblings keep
+           live-autoscaling to new data instead of being frozen along
+           with the zoomed one."""
+        axes = self._main_axes
+        if not axes:
             return None
-        ax0 = self.figure.axes[0]
-        if ax0.get_autoscalex_on():
+        entries = []
+        any_zoomed = False
+        for ax in axes:
+            x_zoomed = not ax.get_autoscalex_on()
+            y_zoomed = not ax.get_autoscaley_on()
+            any_zoomed = any_zoomed or x_zoomed or y_zoomed
+            entries.append((ax.get_xlim() if x_zoomed else None,
+                            ax.get_ylim() if y_zoomed else None))
+        if not any_zoomed:
             return None
-        return {'xlim': ax0.get_xlim(),
-                'ylims': [ax.get_ylim() for ax in self.figure.axes],
-                'n_axes': len(self.figure.axes)}
+        return {'entries': entries, 'n_axes': len(axes)}
 
     def _apply_view(self, saved_view, axes):
         """Restore a captured view onto freshly-rebuilt axes — only if
@@ -9796,12 +9980,17 @@ class GraphWindow(wx.Frame):
         different number of Y's checked, say), the old view doesn't
         necessarily mean anything for the new plot, so it's dropped in
         favor of a fresh autoscale rather than applied somewhere
-        arbitrary."""
+        arbitrary. Only the axes that were actually zoomed/panned get
+        their limits back (set_xlim/set_ylim also turns their autoscale
+        off again, re-marking them as user-held for the NEXT capture);
+        the rest keep autoscaling to live data."""
         if saved_view is None or len(axes) != saved_view['n_axes']:
             return
-        axes[0].set_xlim(saved_view['xlim'])
-        for ax, ylim in zip(axes, saved_view['ylims']):
-            ax.set_ylim(ylim)
+        for ax, (xlim, ylim) in zip(axes, saved_view['entries']):
+            if xlim is not None:
+                ax.set_xlim(xlim)
+            if ylim is not None:
+                ax.set_ylim(ylim)
 
     def _force_repaint(self):
         """canvas.draw() alone was not enough — see the two mechanisms
@@ -9892,6 +10081,15 @@ class GraphWindow(wx.Frame):
     def _draw_empty(self):
         if not _HAS_MATPLOTLIB:
             return
+        if self._interacting:
+            # Same mid-drag protection as _redraw — clearing the figure
+            # under an active zoom/pan drag kills the interaction.
+            self._redraw_pending = True
+            return
+        self._main_axes = []   # nothing user-zoomable on screen anymore
+        for w in self._z_widgets:
+            w.Show(False)
+        self.Layout()
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         ax.set_axis_off()
