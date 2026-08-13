@@ -97,6 +97,7 @@ try:
     from matplotlib.figure import Figure
     from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg
     from matplotlib.backends.backend_wx import NavigationToolbar2Wx
+    from matplotlib.widgets import RangeSlider   # per-map z-scale control (mpl >= 3.4; requirements pin >= 3.7)
 
     class _GraphToolbar(NavigationToolbar2Wx):
         """Same as NavigationToolbar2Wx, except Home also re-enables
@@ -3505,6 +3506,19 @@ class TaskRunnerThread(threading.Thread):
 
         level_names = ['outer'] + [f'inner{i}' for i in range(1, len(level_specs))]
 
+        # Display metadata ONLY (deliberately option (b) of the two
+        # discussed): the .dat column names stay exactly
+        # '{level}_value' — existing analysis scripts parse those — but
+        # the Graph window gets told WHICH device each level actually
+        # sweeps, keyed by the raw header name. Travels alongside the
+        # data through _on_sweep_progress/_on_sweep_done into the
+        # stash; the single-level sweep and while-loop runners simply
+        # never pass one.
+        col_labels = {}
+        for lvl_name, lvl_spec in zip(level_names, level_specs):
+            col_labels[f'{lvl_name}_value'] = (
+                f'{lvl_name[0].upper()}{lvl_name[1:]}: {lvl_spec["alias"]}')
+
         # SPEC CHANGE (see _run_timed_sweep): the LED alone decides
         # recording; verify linked reads are no longer excluded from
         # the recorded data.
@@ -3521,6 +3535,7 @@ class TaskRunnerThread(threading.Thread):
             'aborted': False, 'failed': None,
             'measurements_done': 0, 'last_live_push': 0.0,
             'level_names': level_names, 'total': total_measurements,
+            'col_labels': col_labels,
             'level_progress': [None] * len(level_specs),   # per-level (alias, step+1, total) — see
                                                             # _run_nested_level's _push_step_progress
         }
@@ -3538,7 +3553,8 @@ class TaskRunnerThread(threading.Thread):
         except Exception as e:
             wx.CallAfter(self.panel.on_log, f'Nested sweep data file FAILED to write: {e}\n\n')
 
-        wx.CallAfter(self.panel._on_sweep_done, state['headers'] or [], state['data_rows'], filepath)
+        wx.CallAfter(self.panel._on_sweep_done, state['headers'] or [], state['data_rows'], filepath,
+                     state['col_labels'])
 
         chain_desc = ' -> '.join(aliases)
         n_done = state['measurements_done']
@@ -3709,7 +3725,8 @@ class TaskRunnerThread(threading.Thread):
 
         now = time.time()
         if now - state['last_live_push'] >= 0.5 or state['measurements_done'] == 1:
-            wx.CallAfter(self.panel._on_sweep_progress, list(state['headers']), state['data_rows'][:])
+            wx.CallAfter(self.panel._on_sweep_progress, list(state['headers']), state['data_rows'][:],
+                         state['col_labels'])
             state['last_live_push'] = now
 
     # Crash-proofing (user lost a 2 h while-loop to a GUI freeze +
@@ -8437,7 +8454,7 @@ class TasksPanel(wx.Panel):
         self._clear_row_highlight(row)
         self.grid.ForceRefresh()
 
-    def _stash_sweep_data(self, headers: list, data_rows: list, filepath):
+    def _stash_sweep_data(self, headers: list, data_rows: list, filepath, col_labels=None):
         """Shared by _on_sweep_progress (during a run, filepath=None —
         the file doesn't exist yet) and _on_sweep_done (end of run,
         real filepath). Converts to a plain numeric matrix — cells that
@@ -8448,18 +8465,24 @@ class TasksPanel(wx.Panel):
         TaskRunnerThread._run_timed_sweep, which explodes them into
         real columns before this is ever called; that's what actually
         fixes a Y series silently going all-NaN, not this conversion
-        step."""
+        step.
+
+        col_labels is DISPLAY metadata only (nested runs pass a dict
+        mapping raw header name -> label naming the swept device; other
+        run types pass nothing): it never touches the data file, only
+        what the Graph window shows for those columns."""
         def to_float(v):
             try:
                 return float(v)
             except (TypeError, ValueError):
                 return v
         matrix = [[to_float(v) for v in row_values] for row_values in data_rows]
-        self.last_sweep_data = {'headers': headers, 'matrix': matrix, 'filepath': filepath}
+        self.last_sweep_data = {'headers': headers, 'matrix': matrix, 'filepath': filepath,
+                                'col_labels': col_labels or {}}
         if self.on_sweep_data_ready is not None:
             self.on_sweep_data_ready()
 
-    def _on_sweep_progress(self, headers: list, data_rows: list):
+    def _on_sweep_progress(self, headers: list, data_rows: list, col_labels=None):
         """Called via wx.CallAfter from TaskRunnerThread._run_timed_sweep
         PERIODICALLY DURING a counter or real-device sweep run
         (throttled to at most 2/sec — see LIVE_PUSH_INTERVAL there),
@@ -8475,15 +8498,15 @@ class TasksPanel(wx.Panel):
         back to the generic 'counter_run'/'sweep_run' name (see
         GraphWindow._on_screenshot) rather than the eventual real
         filename, which isn't known yet either."""
-        self._stash_sweep_data(headers, data_rows, filepath=None)
+        self._stash_sweep_data(headers, data_rows, filepath=None, col_labels=col_labels)
 
-    def _on_sweep_done(self, headers: list, data_rows: list, filepath):
+    def _on_sweep_done(self, headers: list, data_rows: list, filepath, col_labels=None):
         """Called via wx.CallAfter from TaskRunnerThread._run_timed_sweep
         once the whole row finishes (success or abort), in addition to
         (not instead of) the usual _on_row_done/_on_row_failed for the
         row itself. Same stashing as the live progress updates, just
         with the real, now-written data file path."""
-        self._stash_sweep_data(headers, data_rows, filepath)
+        self._stash_sweep_data(headers, data_rows, filepath, col_labels=col_labels)
 
     def _on_run_finished(self, n_executed, n_skipped):
         """Called via wx.CallAfter from TaskRunnerThread when the whole
@@ -9473,8 +9496,15 @@ class GraphWindow(wx.Frame):
         self._x_cols, self._y_cols = [], []
         self._main_axes = []          # MAIN plot axes from the last draw (excludes 2D colorbar
                                       # axes, unlike figure.axes) — see _capture_view
-        self._interacting = False     # True while a zoom/pan mouse drag is in progress on the canvas
+        self._interacting = False     # True while a zoom/pan/slider mouse drag is in progress on the canvas
         self._redraw_pending = False  # data arrived during a drag — redraw once on release
+        self._z_fracs = {}            # y header index -> (fmin, fmax) fractions of that map's own
+                                      # data range; survives figure rebuilds so live updates keep
+                                      # each map's chosen clip window — see _draw_2d/_on_z_range
+        self._z_sliders = []          # live RangeSlider refs (matplotlib widgets are GC'd — and
+                                      # stop working — without a persistent reference)
+        self._col_labels = {}         # raw header -> display label (nested runs: which device each
+                                      # level sweeps) — display only, never in the data file
 
         if not _HAS_MATPLOTLIB:
             panel = PlaceholderPanel(self, "Graph needs matplotlib.\n\npip install matplotlib")
@@ -9500,28 +9530,6 @@ class GraphWindow(wx.Frame):
         self.mode_overlay.Bind(wx.EVT_RADIOBUTTON, self._on_selection_changed)
         self.mode_stacked.Bind(wx.EVT_RADIOBUTTON, self._on_selection_changed)
 
-        # 2D z-scale sliders — requirement: adjust the color scale of a 2D
-        # map WHILE measuring. They hold FRACTIONS of the current data
-        # range (0-100 %), not absolute values: the data's min/max move
-        # while a run is producing points, so '100 %' keeps tracking the
-        # growing maximum instead of going stale, and the clip window is
-        # re-applied on every live redraw simply because _draw_2d reads
-        # the sliders each time it rebuilds the figure. Only shown in
-        # 2D-map mode (same toggle spot as the mode radios, in reverse).
-        # SL_LABELS shows the numeric value on the slider itself.
-        self.zmin_label = wx.StaticText(self, label='Z min (% of data range):')
-        self.zmin_slider = wx.Slider(self, value=0, minValue=0, maxValue=100,
-                                     style=wx.SL_HORIZONTAL | wx.SL_LABELS)
-        self.zmax_label = wx.StaticText(self, label='Z max (% of data range):')
-        self.zmax_slider = wx.Slider(self, value=100, minValue=0, maxValue=100,
-                                     style=wx.SL_HORIZONTAL | wx.SL_LABELS)
-        self.zmin_slider.Bind(wx.EVT_SLIDER, self._on_z_slider)
-        self.zmax_slider.Bind(wx.EVT_SLIDER, self._on_z_slider)
-        self._z_widgets = [self.zmin_label, self.zmin_slider,
-                           self.zmax_label, self.zmax_slider]
-        for w in self._z_widgets:
-            w.Show(False)
-
         btn_screenshot = wx.Button(self, label='Screenshot')
         btn_screenshot.Bind(wx.EVT_BUTTON, self._on_screenshot)
 
@@ -9530,10 +9538,13 @@ class GraphWindow(wx.Frame):
         self.toolbar = _GraphToolbar(self.canvas)
         self.toolbar.Realize()
 
-        # Defer figure rebuilds while a zoom/pan drag is in progress —
-        # see _on_canvas_mouse_down. Bound AFTER FigureCanvasWxAgg's own
-        # internal bindings, so these run FIRST and Skip() hands the
-        # event on to matplotlib's handlers unchanged.
+        # Defer figure rebuilds while a zoom/pan or z-slider drag is in
+        # progress — see _on_canvas_mouse_down. Bound AFTER
+        # FigureCanvasWxAgg's own internal bindings, so these run FIRST
+        # and Skip() hands the event on to matplotlib's handlers
+        # unchanged. This is also what keeps the per-map RangeSliders
+        # alive under the cursor: a live push mid-drag would otherwise
+        # rebuild the figure and destroy the slider being dragged.
         self.canvas.Bind(wx.EVT_LEFT_DOWN, self._on_canvas_mouse_down)
         self.canvas.Bind(wx.EVT_RIGHT_DOWN, self._on_canvas_mouse_down)
         # The second press of a double-click arrives as DCLICK, not
@@ -9553,10 +9564,6 @@ class GraphWindow(wx.Frame):
         left.Add(self.status_label, 0, wx.EXPAND | wx.BOTTOM, self.FromDIP(PAD_LARGE))
         left.Add(self.mode_overlay, 0, wx.BOTTOM, self.FromDIP(PAD_SMALL))
         left.Add(self.mode_stacked, 0, wx.BOTTOM, self.FromDIP(PAD_LARGE))
-        left.Add(self.zmin_label, 0, wx.BOTTOM, self.FromDIP(PAD_SMALL))
-        left.Add(self.zmin_slider, 0, wx.EXPAND | wx.BOTTOM, self.FromDIP(PAD_SMALL))
-        left.Add(self.zmax_label, 0, wx.BOTTOM, self.FromDIP(PAD_SMALL))
-        left.Add(self.zmax_slider, 0, wx.EXPAND | wx.BOTTOM, self.FromDIP(PAD_LARGE))
         left.Add(btn_screenshot, 0, wx.EXPAND)
 
         right = wx.BoxSizer(wx.VERTICAL)
@@ -9607,10 +9614,27 @@ class GraphWindow(wx.Frame):
         headers, matrix, filepath = data['headers'], data['matrix'], data['filepath']
         same_columns = (headers == self._headers)
         prev_filepath = self._filepath   # for the end-of-run PNG auto-save below
+        new_labels = data.get('col_labels') or {}
+        labels_changed = (new_labels != self._col_labels)
+        self._col_labels = new_labels
         self._matrix, self._filepath = matrix, filepath
 
         if same_columns:
             self._headers = headers
+            if labels_changed:
+                # Identical header sets across consecutive runs are
+                # common for nested sweeps ('outer_value' etc. are
+                # structural) — but the SWEPT DEVICE may differ, so the
+                # stale list labels must be refreshed. The selection is
+                # deliberately preserved (same trick as the fast path
+                # itself): identical headers produce identical list
+                # ordering, so checked indices still mean the same
+                # columns.
+                x_checked = list(self.x_list.GetCheckedItems())
+                y_checked = list(self.y_list.GetCheckedItems())
+                self._set_axis_lists(headers)
+                self.x_list.SetCheckedItems(x_checked)
+                self.y_list.SetCheckedItems(y_checked)
             self._redraw()
             # A REAL filepath appearing where there was none (or another
             # run's) is exactly the _on_sweep_done push — the run just
@@ -9620,6 +9644,20 @@ class GraphWindow(wx.Frame):
             return
 
         self._headers = headers
+        self._z_fracs = {}   # keyed by header index — a new column set makes old keys
+                             # point at different quantities; same logic as resetting X/Y
+        self._set_axis_lists(headers)
+        self.status_label.SetLabel('')
+        self._draw_empty()
+
+    def _set_axis_lists(self, headers):
+        """Build the X/Y checklist contents (and the column-index maps
+        behind them) from a header set. Factored out of refresh_data so
+        the labels-changed-but-headers-identical case can rebuild the
+        STRINGS without duplicating the naming logic. All checks come
+        out cleared (wx resets them on Set anyway — the explicit loops
+        are belt and braces); callers that want to preserve a selection
+        save/restore the checked indices around this call."""
         # 'elapsed_s' is always present, in BOTH the single-level sweep
         # format (counter_value/device_value, step_number, elapsed_s,
         # reads...) and the nested format (outer_count, outer_value,
@@ -9644,9 +9682,12 @@ class GraphWindow(wx.Frame):
             # Nested (2+ levels) or any other shape: raw column order —
             # already sensible (outer before inner, count before value,
             # by request) — with prettified labels instead of raw
-            # snake_case.
+            # snake_case, and the nested runner's display metadata
+            # taking precedence where present, so 'Outer value' becomes
+            # 'Outer: <alias of the actually-swept device>'.
             structural_x_cols = list(range(elapsed_idx + 1))
-            structural_x_names = [_prettify_header(h) for h in headers[:elapsed_idx + 1]]
+            structural_x_names = [self._col_labels.get(h, _prettify_header(h))
+                                  for h in headers[:elapsed_idx + 1]]
 
         # ALL columns are candidates on BOTH axes — requirement: 'I want to be
         # able to plot everything against everything.' The read columns
@@ -9673,9 +9714,6 @@ class GraphWindow(wx.Frame):
         for i in range(self.y_list.GetCount()):
             self.y_list.Check(i, False)
 
-        self.status_label.SetLabel('')
-        self._draw_empty()
-
     def _on_selection_changed(self, event):
         self._redraw()
 
@@ -9699,23 +9737,27 @@ class GraphWindow(wx.Frame):
         self.status_label.SetLabel('')
         self._redraw()
 
-    def _on_z_slider(self, event):
-        """Keep min STRICTLY below max by pushing the OTHER slider out
-        of the way (wx.Slider.SetValue emits no event, so no
-        recursion), then redraw with the new clip window. The
-        strictness guarantee is what lets _draw_2d hand pcolormesh a
-        vmin < vmax without any further guard of its own."""
-        zmin, zmax = self.zmin_slider.GetValue(), self.zmax_slider.GetValue()
-        if zmin >= zmax:
-            if event.GetEventObject() is self.zmin_slider:
-                if zmin >= 100:
-                    self.zmin_slider.SetValue(99)
-                self.zmax_slider.SetValue(min(100, self.zmin_slider.GetValue() + 1))
-            else:
-                if zmax <= 0:
-                    self.zmax_slider.SetValue(1)
-                self.zmin_slider.SetValue(max(0, self.zmax_slider.GetValue() - 1))
-        self._redraw()
+    def _on_z_range(self, val, y_col, mesh, dmin, dmax):
+        """RangeSlider callback for ONE 2D map (bound per-subplot in
+        _draw_2d with that map's own mesh and data range). Stores the
+        fractions keyed by the Y column's header index — the store,
+        not the widget, is the durable state: the figure (and the
+        slider with it) is rebuilt on every live data push, and
+        _draw_2d re-applies the stored fractions to each rebuilt map.
+        The clim update here is applied DIRECTLY to the existing mesh
+        (set_clim + draw_idle), not via a full figure rebuild — a
+        rebuild mid-drag would destroy the slider being dragged (the
+        _interacting guard is already holding data pushes off for the
+        same reason). The colorbar follows automatically since it
+        shares the mesh's norm."""
+        lo, hi = float(val[0]), float(val[1])
+        self._z_fracs[y_col] = (lo, hi)
+        if dmin is None or dmax is None or dmax <= dmin:
+            return   # degenerate/all-NaN data range — nothing to clip yet
+        if hi <= lo:
+            return   # thumbs collapsed — keep the last valid clim
+        mesh.set_clim(dmin + lo * (dmax - dmin), dmin + hi * (dmax - dmin))
+        self.canvas.draw_idle()
 
     def _on_canvas_mouse_down(self, event):
         """A zoom-rectangle or pan drag is starting (or any plain click
@@ -9816,12 +9858,11 @@ class GraphWindow(wx.Frame):
         # 'overlay' equivalent makes sense for stacking color maps).
         self.mode_overlay.Show(not is_2d)
         self.mode_stacked.Show(not is_2d)
-        for w in self._z_widgets:
-            w.Show(is_2d)   # z-scale sliders only mean anything for a color map
         self.Layout()
 
         saved_view = self._capture_view()
         self.figure.clear()
+        self._z_sliders = []   # their axes just died with the figure; _draw_2d rebuilds them
         if is_2d:
             x1_col, x2_col = self._x_cols[x_checked[0]], self._x_cols[x_checked[1]]
             axes = self._draw_2d(x1_col, x2_col, y_cols)
@@ -9876,12 +9917,15 @@ class GraphWindow(wx.Frame):
         with different physical units/ranges)."""
         n = len(y_cols)
         axes = []
-        x1_label = _prettify_header(self._headers[x1_col])
-        x2_label = _prettify_header(self._headers[x2_col])
+        x1_label = self._col_labels.get(self._headers[x1_col],
+                                        _prettify_header(self._headers[x1_col]))
+        x2_label = self._col_labels.get(self._headers[x2_col],
+                                        _prettify_header(self._headers[x2_col]))
         for i, y_col in enumerate(y_cols):
             ax = self.figure.add_subplot(n, 1, i + 1)
             x1_vals, x2_vals, grid = self._build_2d_grid(x1_col, x2_col, y_col)
-            y_label = _prettify_header(self._headers[y_col])
+            y_label = self._col_labels.get(self._headers[y_col],
+                                           _prettify_header(self._headers[y_col]))
             if grid is None:
                 # Refused by the cell cap — see _build_2d_grid.
                 ax.set_axis_off()
@@ -9901,31 +9945,48 @@ class GraphWindow(wx.Frame):
                 ax.text(0.5, 0.5, f"Not enough distinct values for a 2D grid\n({x1_label} x {x2_label})",
                        ha='center', va='center', transform=ax.transAxes, color=_wx_colour_to_hex(COLOR_TEXT_MUTED))
             else:
-                # Z clip window from the sliders, as FRACTIONS of THIS
-                # grid's own finite data range — recomputed every
-                # redraw, so during a live run '100 %' keeps tracking
-                # the growing maximum (see the slider creation comment).
-                # fmin < fmax is guaranteed strictly by _on_z_slider;
-                # both at the endpoints (the default) or a degenerate
-                # data range (all-equal, all-NaN) falls back to
-                # pcolormesh's own autoscaling via vmin=vmax=None.
-                fmin = self.zmin_slider.GetValue() / 100.0
-                fmax = self.zmax_slider.GetValue() / 100.0
+                # Per-map z clip window — requirement: 'have these
+                # sliders next to EACH individual plot.' The fractions
+                # live in self._z_fracs (keyed by the Y column's header
+                # index), NOT in the widget: the figure and every
+                # slider on it are rebuilt on each live data push, and
+                # this is where the stored fractions get re-applied —
+                # which is also what makes '100 %' keep tracking a
+                # growing maximum during a run (the range below is THIS
+                # map's own current finite data range, recomputed every
+                # rebuild).
+                fmin, fmax = self._z_fracs.get(y_col, (0.0, 1.0))
+                finite = [v for grid_row in grid
+                          for v in grid_row if math.isfinite(v)]
+                if finite:
+                    dmin, dmax = min(finite), max(finite)
+                else:
+                    dmin = dmax = None
                 vmin = vmax = None
-                if fmin > 0.0 or fmax < 1.0:
-                    finite = [v for grid_row in grid
-                              for v in grid_row if math.isfinite(v)]
-                    if finite:
-                        dmin, dmax = min(finite), max(finite)
-                        if dmax > dmin:
-                            vmin = dmin + fmin * (dmax - dmin)
-                            vmax = dmin + fmax * (dmax - dmin)
+                if (dmin is not None and dmax > dmin
+                        and fmax > fmin and (fmin > 0.0 or fmax < 1.0)):
+                    vmin = dmin + fmin * (dmax - dmin)
+                    vmax = dmin + fmax * (dmax - dmin)
                 mesh = ax.pcolormesh(x2_vals, x1_vals, grid, shading='auto',
                                      vmin=vmin, vmax=vmax)
                 self.figure.colorbar(mesh, ax=ax, label=y_label)
                 ax.set_xlabel(x2_label)
                 ax.set_ylabel(x1_label)
-                ax.set_title(y_label)
+                # Title moves to the left so the slider can share the
+                # strip above the map without colliding with it.
+                ax.set_title(y_label, loc='left')
+                # The slider sits in the right half of that strip,
+                # attached to THIS map's axes (inset axes follow the
+                # parent through tight_layout, and the title band
+                # already reserves the vertical space).
+                sax = ax.inset_axes([0.55, 1.02, 0.45, 0.04])
+                sax.set_navigate(False)   # keep the toolbar's zoom/pan off the slider axes
+                slider = RangeSlider(sax, '', 0.0, 1.0, valinit=(fmin, fmax))
+                slider.valtext.set_visible(False)   # would render outside the axes, over the colorbar
+                slider.on_changed(
+                    lambda val, y_col=y_col, mesh=mesh, dmin=dmin, dmax=dmax:
+                        self._on_z_range(val, y_col, mesh, dmin, dmax))
+                self._z_sliders.append(slider)
             axes.append(ax)
         return axes
 
@@ -10045,12 +10106,12 @@ class GraphWindow(wx.Frame):
         lines = []
         for ax, col, color in zip(axes, y_cols, self._COLORS):
             y_data = [self._to_plot_float(row[col]) for row in self._matrix]
-            label = self._headers[col]
+            label = self._col_labels.get(self._headers[col], self._headers[col])
             line, = ax.plot(x_data, y_data, color=color, marker='o', markersize=3, label=label)
             ax.tick_params(axis='y', colors=color)
             lines.append(line)
 
-        ax0.set_xlabel(self._headers[x_col])
+        ax0.set_xlabel(self._col_labels.get(self._headers[x_col], self._headers[x_col]))
         ax0.legend(lines, [ln.get_label() for ln in lines], loc='best')
         ax0.grid(True, alpha=0.3)
         return axes
@@ -10067,7 +10128,7 @@ class GraphWindow(wx.Frame):
             ax = self.figure.add_subplot(n, 1, i + 1, sharex=first_ax)
             first_ax = first_ax or ax
             y_data = [self._to_plot_float(row[col]) for row in self._matrix]
-            label = self._headers[col]
+            label = self._col_labels.get(self._headers[col], self._headers[col])
             ax.plot(x_data, y_data, color=self._COLORS[i % len(self._COLORS)],
                     marker='o', markersize=3, label=label)
             ax.legend(loc='best')
@@ -10075,7 +10136,7 @@ class GraphWindow(wx.Frame):
             if i < n - 1:
                 ax.tick_params(labelbottom=False)
             axes.append(ax)
-        self.figure.axes[-1].set_xlabel(self._headers[x_col])
+        self.figure.axes[-1].set_xlabel(self._col_labels.get(self._headers[x_col], self._headers[x_col]))
         return axes
 
     def _draw_empty(self):
@@ -10087,9 +10148,7 @@ class GraphWindow(wx.Frame):
             self._redraw_pending = True
             return
         self._main_axes = []   # nothing user-zoomable on screen anymore
-        for w in self._z_widgets:
-            w.Show(False)
-        self.Layout()
+        self._z_sliders = []   # axes die with the figure below
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         ax.set_axis_off()
