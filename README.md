@@ -68,6 +68,7 @@ Read `qmeas_tcpip_setup.pdf` if you have trouble connecting your devices via TCP
 |---|---|
 | `qmeas.py` + `qmeas_*.py` | the application |
 | `qmanual.pdf` | the manual (Help -> Manual opens exactly this file) |
+| `qmeas_tcpip_setup.pdf` | guide to connect devices via TCPIP |
 | `qbridge/` | bridge framework + OptiCool (×2) and TOPTICA adapters |
 | `devices/` | example device lists |
 | `images/` | application icon |
