@@ -59,6 +59,9 @@ Read `qmanual.pdf` — it covers installation, connecting instruments,
 defining commands, LEDs, task rows, nesting/linking, while-loops, the AI
 assistant, and the bridges, in about a dozen pages.
 
+Read `qmeas_tcpip_setup.pdf` if you have trouble connecting your devices via TCPIP.
+
+
 ## Repository layout
 
 | Path | Purpose |
