@@ -136,7 +136,7 @@ from qmeas_settings import load_settings, save_settings
 from qmeas_utils import get_resource_manager, dev_dir, custom_dir, img, app_root, open_file_cross_platform, open_text_editor
 
 APP_NAME    = 'qmeas'
-APP_VERSION = '2.0'
+APP_VERSION = '2.1'
 
 LED_DIAMETER = 12
 
@@ -1406,6 +1406,13 @@ def _eval_link_expression(expr: str, mother_value: float) -> float:
     if not text:
         raise ValueError('linked row has no expression in Constant/Start '
                          "(e.g. '[%]*5' — [%] is the mother row's value)")
+    if re.search(r'\[%\]\s*(?:[0-9.]|[eE][0-9+-])', text):
+        # '[%]e3', '[%]1e3', '[%]2' — a number glued to the placeholder
+        # (v2.1: seen in practice). Would be a bare SyntaxError after
+        # substitution; say what was probably meant instead.
+        raise ValueError(f'link expression {expr!r}: a number directly after [%] needs an '
+                         f"operator, e.g. '[%]*1e3' (scientific notation only works "
+                         f'on literals, not on [%])')
     text = text.replace('[%]', '(_m_)').replace('^', '**')
     namespace = dict(_LINK_FUNCS)
     namespace['_m_'] = float(mother_value)
@@ -2030,15 +2037,41 @@ class TaskRunnerThread(threading.Thread):
         A row reporting has_child but the next one not existing
         (grid inconsistency — shouldn't happen if the depth structure
         is well-formed, but this doesn't assume that) stops the chain
-        there rather than hanging or crashing."""
+        there rather than hanging or crashing.
+
+        v2.1 (nest+link combining): each level may be a link-box
+        mother. Its same-depth followers sit directly below it, BEFORE
+        its child, and are gathered per level via _gather_link_box
+        (same live fetch, same frontier freeze). Returns
+        (chain_rows, chain_fetched, chain_followers, all_rows,
+        timed_out): chain_followers[i] is the [(row, fetched), ...]
+        list of ACTIVE followers of chain_rows[i] (empty list for a
+        level without a box); all_rows is every row the chain spans,
+        followers included (contiguous — the scan advances by its
+        length). has_child on a fetched dict is already computed past
+        the row's box (_has_active_child), so the child is always at
+        box_end+1."""
         chain_rows = [root_row]
         chain_fetched = [root_fetched]
+        chain_followers = []
+        all_rows = [root_row]
         cur = root_row
-        while chain_fetched[-1].get('has_child'):
+        while True:
+            level = chain_fetched[-1]
+            followers = []
+            if level.get('has_follower'):
+                box_rows, followers, timed_out = self._gather_link_box(cur, level)
+                if timed_out:
+                    return chain_rows, chain_fetched, chain_followers, all_rows, True
+                all_rows.extend(box_rows[1:])
+                cur = box_rows[-1]
+            chain_followers.append(followers)
+            if not level.get('has_child'):
+                break
             cur += 1
             child = self._fetch_row(cur)
             if child.get('timed_out'):
-                return chain_rows, chain_fetched, True
+                return chain_rows, chain_fetched, chain_followers, all_rows, True
             if not child.get('exists'):
                 break
             if not child.get('eligible'):
@@ -2056,7 +2089,8 @@ class TaskRunnerThread(threading.Thread):
                 break
             chain_rows.append(cur)
             chain_fetched.append(child)
-        return chain_rows, chain_fetched, False
+            all_rows.append(cur)
+        return chain_rows, chain_fetched, chain_followers, all_rows, False
 
     def _gather_link_box(self, anchor_row: int, anchor_fetched: dict):
         """Starting from anchor_row (whose own live fetch already says
@@ -2548,20 +2582,28 @@ class TaskRunnerThread(threading.Thread):
                 # executing any of it. This is also what freezes every
                 # row in the chain for the block's whole duration: each
                 # fetch advances self._run_frontier immediately.
-                chain_rows, chain_fetched, timed_out = self._gather_nested_chain(row, fetched)
+                chain_rows, chain_fetched, chain_followers, all_rows, timed_out = \
+                    self._gather_nested_chain(row, fetched)
                 if timed_out:
                     wx.CallAfter(self.panel.on_log,
                                 f'ABORTED: main thread did not respond while fetching a '
                                 f'nested row (waited {self.FETCH_TIMEOUT:g}s) — is a dialog '
                                 f'blocking it?\n\n')
                     break
-                wx.CallAfter(self.panel._on_chain_start, chain_rows)
-                did_execute = self._run_nested_sweep(chain_rows, chain_fetched, row_start)
+                # UI block = chain levels + ACTIVE followers (an inactive
+                # follower stays passed-over, never completion-marked —
+                # same as a single-level link box); scan advance covers
+                # every row the chain spans.
+                block = sorted(chain_rows + [r for fols in chain_followers for r, _f in fols])
+                wx.CallAfter(self.panel._on_chain_start, block)
+                did_execute = self._run_nested_sweep(chain_rows, chain_fetched, row_start,
+                                                     chain_followers=chain_followers,
+                                                     block_rows=block)
                 if did_execute:
                     n_executed += 1
                 else:
                     n_skipped += 1
-                row += len(chain_rows)
+                row += len(all_rows)
                 continue
 
             if fetched.get('has_follower'):
@@ -3383,7 +3425,8 @@ class TaskRunnerThread(threading.Thread):
         wx.CallAfter(self.panel._on_row_done, row, entry_log)
         return True
 
-    def _run_nested_sweep(self, chain_rows: list, chain_fetched: list, row_start: str) -> bool:
+    def _run_nested_sweep(self, chain_rows: list, chain_fetched: list, row_start: str,
+                          chain_followers: list = None, block_rows: list = None) -> bool:
         """Executes a chain of 2+ rows at strictly increasing nesting
         depth as genuine nested for-loops. requirement: 'one loop counts e.g.
         0,1,2,3,4 and then the other loop increments e.g. 0->1 and then
@@ -3427,9 +3470,30 @@ class TaskRunnerThread(threading.Thread):
         (requirement: 'abort means abort') — every row in the chain gets
         marked via _on_chain_failed together, not just the level that
         actually failed, so nothing in the chain looks like it silently
-        succeeded."""
+        succeeded.
+
+        LINK BOXES PER LEVEL (v2.1, chain_followers/block_rows non-None
+        — see _gather_nested_chain): chain_followers[i] is the list of
+        active followers of level i. Every follower of every level is
+        validated UPFRONT via _prepare_followers (same as the single-
+        level link box) before anything is written. Per step of a
+        level: level writes/ramps/verifies its own target, then each of
+        its followers writes f([%]=target) top to bottom
+        (_write_follower_step — the exact same machinery as the single-
+        level box), and ONLY THEN the level's Integration Time runs and
+        the recursion continues. Data columns: after each level's
+        '{level}_count', '{level}_value' come that level's follower
+        columns '{alias}_value' (same naming as the single-level box),
+        then 'elapsed_s', then the reads. block_rows (levels + active
+        followers) is what gets UI-marked together; defaults to
+        chain_rows. With chain_followers=None every branch below
+        behaves exactly as before."""
         level_specs = []
         aliases = [f['alias'] for f in chain_fetched]
+        if chain_followers is None:
+            chain_followers = [[] for _ in chain_fetched]
+        if block_rows is None:
+            block_rows = chain_rows
 
         for i, fetched in enumerate(chain_fetched):
             alias = fetched['alias']
@@ -3447,7 +3511,7 @@ class TaskRunnerThread(threading.Thread):
                 # remains the ONLY control command with sweep values.
                 what = f"'{command_name}'" if device_name == STANDARD_DEVICE_NAME else 'a script'
                 row_finish = time.strftime('%Y-%m-%d %H:%M:%S')
-                wx.CallAfter(self.panel._on_chain_failed, chain_rows,
+                wx.CallAfter(self.panel._on_chain_failed, block_rows,
                             f"FAILED: {alias} — {what} has no sweep values and can't "
                             f"be part of a nested chain\n{row_start} to {row_finish}\n\n")
                 return False
@@ -3460,7 +3524,7 @@ class TaskRunnerThread(threading.Thread):
                 msg = f'FAILED: {_alias} — {field_name} {raw_value!r} is not a valid number'
                 if hint:
                     msg += f' ({hint})'
-                wx.CallAfter(self.panel._on_chain_failed, chain_rows,
+                wx.CallAfter(self.panel._on_chain_failed, block_rows,
                             f'{msg}\n{row_start} to {row_finish}\n\n')
 
             try:
@@ -3492,7 +3556,7 @@ class TaskRunnerThread(threading.Thread):
                         self.stem, device_name, command_name)
                 except ValueError as e:
                     row_finish = time.strftime('%Y-%m-%d %H:%M:%S')
-                    wx.CallAfter(self.panel._on_chain_failed, chain_rows,
+                    wx.CallAfter(self.panel._on_chain_failed, block_rows,
                                 f'FAILED: {alias} — {e}\n{row_start} to {row_finish}\n\n')
                     return False
 
@@ -3504,7 +3568,28 @@ class TaskRunnerThread(threading.Thread):
                 'rate': rate, 'equals_str': equals_str,
             })
 
+        # Per-level link-box followers: validate ALL of them before
+        # anything is written (a bad expression at level 3 must not
+        # surface after level 1 has already moved a magnet). Test
+        # value = the level's first sweep value, same as the single-
+        # level box uses its start value.
+        for i, (spec, followers) in enumerate(zip(level_specs, chain_followers)):
+            spec['followers'] = []
+            if not followers:
+                continue
+            test_value = spec['sweep_values'][0] if spec['sweep_values'] else 0.0
+            try:
+                spec['followers'] = self._prepare_followers(followers, test_value=test_value)
+            except Exception as e:
+                row_finish = time.strftime('%Y-%m-%d %H:%M:%S')
+                wx.CallAfter(self.panel._on_chain_failed, block_rows,
+                            f'FAILED: {spec["alias"]} (linked rows) — {e}\n'
+                            f'{row_start} to {row_finish}\n\n')
+                return False
+
         level_names = ['outer'] + [f'inner{i}' for i in range(1, len(level_specs))]
+        level_follower_aliases = [[fol['alias'] for fol in spec['followers']]
+                                  for spec in level_specs]
 
         # Display metadata ONLY (deliberately option (b) of the two
         # discussed): the .dat column names stay exactly
@@ -3518,6 +3603,9 @@ class TaskRunnerThread(threading.Thread):
         for lvl_name, lvl_spec in zip(level_names, level_specs):
             col_labels[f'{lvl_name}_value'] = (
                 f'{lvl_name[0].upper()}{lvl_name[1:]}: {lvl_spec["alias"]}')
+            for fol in lvl_spec['followers']:
+                col_labels[f'{fol["alias"]}_value'] = (
+                    f'{lvl_name[0].upper()}{lvl_name[1:]} linked: {fol["alias"]}')
 
         # SPEC CHANGE (see _run_timed_sweep): the LED alone decides
         # recording; verify linked reads are no longer excluded from
@@ -3535,6 +3623,7 @@ class TaskRunnerThread(threading.Thread):
             'aborted': False, 'failed': None,
             'measurements_done': 0, 'last_live_push': 0.0,
             'level_names': level_names, 'total': total_measurements,
+            'level_follower_aliases': level_follower_aliases,
             'col_labels': col_labels,
             'level_progress': [None] * len(level_specs),   # per-level (alias, step+1, total) — see
                                                             # _run_nested_level's _push_step_progress
@@ -3556,26 +3645,33 @@ class TaskRunnerThread(threading.Thread):
         wx.CallAfter(self.panel._on_sweep_done, state['headers'] or [], state['data_rows'], filepath,
                      state['col_labels'])
 
-        chain_desc = ' -> '.join(aliases)
+        chain_desc = ' -> '.join(
+            alias + (f' [+{", ".join(fols)}]' if fols else '')
+            for alias, fols in zip(aliases, level_follower_aliases))
         n_done = state['measurements_done']
+        link_log = ''.join(
+            f'Linked: {fol["alias"]} = {fol["expr"]} (of {spec["alias"]})\n'
+            for spec in level_specs for fol in spec['followers'])
 
         if state['failed'] is not None:
             entry_log = (f'FAILED: nested chain {chain_desc} — {state["failed"]}\n'
+                        f'{link_log}'
                         f'{n_done}/{total_measurements} measurements completed before the failure\n'
                         f'{row_start} to {row_finish}\n'
                         f'Data file: {filepath if filepath else "(failed to write)"}\n\n')
-            wx.CallAfter(self.panel._on_chain_failed, chain_rows, entry_log)
+            wx.CallAfter(self.panel._on_chain_failed, block_rows, entry_log)
             return False
 
         entry_log = (f'Nested sweep: {chain_desc} — {n_done}/{total_measurements} measurements'
                     f'{" (aborted)" if state["aborted"] else ""}\n'
+                    f'{link_log}'
                     f'{row_start} to {row_finish}\n'
                     f'Data file: {filepath if filepath else "(failed to write)"}\n\n')
 
         if state['aborted']:
-            wx.CallAfter(self.panel._on_chain_failed, chain_rows, entry_log)
+            wx.CallAfter(self.panel._on_chain_failed, block_rows, entry_log)
             return False
-        wx.CallAfter(self.panel._on_chain_done, chain_rows, entry_log)
+        wx.CallAfter(self.panel._on_chain_done, block_rows, entry_log)
         return True
 
     def _push_step_progress(self, state: dict):
@@ -3661,12 +3757,30 @@ class TaskRunnerThread(threading.Thread):
                         state['aborted'] = True
                         return
 
+            # Link-box followers of THIS level: the level has fully
+            # reached its target (ramp/verify above included) — write
+            # every follower's f([%]=target_value), top to bottom, and
+            # ONLY THEN run this level's Integration Time (same order
+            # as the single-level box in _run_timed_sweep). A follower
+            # failure fails the whole chain.
+            follower_values = []
+            if spec.get('followers'):
+                try:
+                    for fol in spec['followers']:
+                        follower_values.append(self._write_follower_step(fol, target_value))
+                except Exception as e:
+                    state['failed'] = e
+                    return
+                if self._abort.is_set():
+                    state['aborted'] = True
+                    return
+
             self._sleep_checking_abort(spec['wait_s'])
             if self._abort.is_set():
                 state['aborted'] = True
                 return
 
-            new_path = path + [(step_number, target_value)]
+            new_path = path + [(step_number, target_value, follower_values)]
 
             if is_last_level:
                 self._record_nested_measurement(new_path, state)
@@ -3681,6 +3795,8 @@ class TaskRunnerThread(threading.Thread):
         every ancestor level's current step — reads every active
         query and appends one row: {level}_count, {level}_value for
         each level outermost-first (count before value, by request),
+        followed by that level's linked follower columns {alias}_value
+        if it is a link-box mother (v2.1),
         then elapsed_s (state['t0'], set once at the very start of the
         whole nested block), then the read columns — same dynamic-
         arity column discovery as the single-level sweep (a multi-value
@@ -3689,8 +3805,9 @@ class TaskRunnerThread(threading.Thread):
         reads = self._execute_active_queries()
         elapsed = time.time() - state['t0']
         row_values = []
-        for step_number, value in path:
+        for step_number, value, follower_values in path:
             row_values.extend([step_number, value])
+            row_values.extend(follower_values)   # this level's linked rows (v2.1), may be empty
         row_values.append(elapsed)
         for _alias, value in reads:
             if isinstance(value, list):
@@ -3700,8 +3817,9 @@ class TaskRunnerThread(threading.Thread):
 
         if state['headers'] is None:
             headers = []
-            for name in state['level_names']:
+            for name, fol_aliases in zip(state['level_names'], state['level_follower_aliases']):
                 headers.extend([f'{name}_count', f'{name}_value'])
+                headers.extend(f'{fol_alias}_value' for fol_alias in fol_aliases)
             headers.append('elapsed_s')
             for alias_, value in reads:
                 # alias_ is already exactly f'{device}_{command}' — see
@@ -7444,12 +7562,15 @@ class TasksPanel(wx.Panel):
             if nonnestable_involved or any(self._row_in_link_box(r) for r in (sel or [row])):
                 # Link-box members can't nest: changing any member's
                 # depth breaks the same-depth invariant the box is
-                # built on (and v1 linking is depth-0 only). Grayed,
-                # not hidden — same treatment as scripts.
+                # built on. (A row BELOW a box can be nested under the
+                # box's mother — v2.1.) Grayed, not hidden — same
+                # treatment as scripts.
                 item_nest.Enable(False)
             else:
                 self.grid.Bind(wx.EVT_MENU, self._on_nest_marked, item_nest)
-        if depth > 0 and not has_child:
+        if depth > 0 and not has_child and not self._row_in_link_box(row):
+            # v2.1: link-box members can't Unnest either (same-depth
+            # invariant — Unlink first, then Unnest).
             # Deliberately NOT gated on nonnestable_involved — Unnest is the
             # escape hatch out of an already-nested script (however it
             # got there, e.g. a grid built before this check existed),
@@ -7562,9 +7683,8 @@ class TasksPanel(wx.Panel):
         linked (a follower) or the anchor of one (the row directly
         below is linked at the same depth). Mirrors
         CommandCellRenderer._chain_segment's membership logic. Used to
-        gray Nest for the whole box: nesting any member would change
-        its depth and break the same-depth invariant linking is built
-        on (and v1 linking is depth-0 only anyway)."""
+        gray Nest/Unnest for the whole box: changing any member's depth
+        would break the same-depth invariant linking is built on."""
         depth, linked = self._struct_get(row)
         if linked:
             return True
@@ -7851,12 +7971,45 @@ class TasksPanel(wx.Panel):
         a row is merely switched off, or toggling a child off would
         open loopholes like linking the parent and re-activating the
         child into an invalid combination. For run-time/simulate
-        dispatch, use _has_active_child instead."""
-        if row + 1 >= self.grid.GetNumberRows():
+        dispatch, use _has_active_child instead.
+
+        v2.1 (nest+link combining): the child is the first row PAST
+        this row's link box (_box_end), not blindly row+1 — a mother's
+        same-depth followers sit between her and her child. A linked
+        row (follower) is a leaf by definition and never has a child;
+        anything deeper below it belongs to the box's mother. With no
+        linked rows anywhere this reduces exactly to the old
+        'row+1 is deeper' rule."""
+        depth_this, linked = self._struct_get(row)
+        if linked:
             return False
-        depth_this, _ = self._struct_get(row)
-        depth_next, _ = self._struct_get(row + 1)
+        child = self._box_end(row) + 1
+        if child >= self.grid.GetNumberRows():
+            return False
+        depth_next, _ = self._struct_get(child)
         return depth_next > depth_this
+
+    def _box_end(self, row: int) -> int:
+        """Last row of the link box `row` anchors: `row` itself if no
+        same-depth linked rows sit directly below it, else the last
+        such follower. Structural (blind to On) — a deactivated
+        follower is still part of the box, same as everywhere else.
+        The row after _box_end(row) is where a child would sit."""
+        depth, _ = self._struct_get(row)
+        end = row
+        n = self.grid.GetNumberRows()
+        while end + 1 < n:
+            next_depth, next_linked = self._struct_get(end + 1)
+            if next_linked and next_depth == depth:
+                end += 1
+            else:
+                break
+        return end
+
+    def _child_row(self, row: int):
+        """Row index of `row`'s nested child (structural — see
+        _has_child), or None."""
+        return self._box_end(row) + 1 if self._has_child(row) else None
 
     def _has_active_child(self, row: int) -> bool:
         """_has_child AND the child row is actually switched on with a
@@ -7874,10 +8027,11 @@ class TasksPanel(wx.Panel):
         the moment it read chain_fetched (the user's 'huge bug'). Mirrors
         what _gather_link_box already did for deactivated followers
         (in the box structurally, excluded from execution)."""
-        if not self._has_child(row):
+        child = self._child_row(row)
+        if child is None:
             return False
-        return (self.grid.GetCellValue(row + 1, self.COL_ON) == '1'
-                and self.grid.GetCellValue(row + 1, self.COL_CMD) != '')
+        return (self.grid.GetCellValue(child, self.COL_ON) == '1'
+                and self.grid.GetCellValue(child, self.COL_CMD) != '')
 
     def _on_nest_marked(self, event):
         """Set to exactly (row above)+1. Refuses if this row has a child
@@ -7892,7 +8046,9 @@ class TasksPanel(wx.Panel):
             if self._row_in_link_box(row):
                 continue   # nesting a link-box member would break the
                            # box's same-depth invariant — menu already
-                           # grays this, enforced here too
+                           # grays this, enforced here too. (Rows below
+                           # a box nest normally: above_depth is the
+                           # last follower's = the mother's depth.)
             if self._selection_touches_nonnestable([row]):
                 continue   # script or non-counter control row, as the
                            # row itself OR as the would-be parent above —
@@ -7921,19 +8077,23 @@ class TasksPanel(wx.Panel):
         for row in sorted(self.grid.GetSelectedRows(), reverse=True):
             if self._row_frozen(row):
                 continue   # defensive — entry point already filters these out
-            if self._has_child(row):
-                continue
+            if self._has_child(row) or self._row_in_link_box(row):
+                continue   # box members: Unlink first (menu grays this too)
             _, linked = self._struct_get(row)
             self._struct_set(row, 0, linked)
         self.grid.ForceRefresh()
 
-    def _chain_size_if_linked(self, row: int) -> int:
+    def _chain_size_if_linked(self, row: int, at_depth=None) -> int:
         """Hypothetical total row count of the link-box row would join if
         its linked flag were set True — walks up through the anchor and
         down through any rows already linked to it. Used to enforce
         MAX_LINK_CHAIN before actually setting the flag, and mirrored in
-        the menu-visibility check so batch link actions can't bypass it."""
-        depth, _ = self._struct_get(row)
+        the menu-visibility check so batch link actions can't bypass it.
+
+        at_depth (v2.1): evaluate as if `row` sat at that depth — the
+        box it is about to join when Link pulls a depth+1 row up to its
+        mother's level. None = the row's current depth (old behaviour)."""
+        depth = self._struct_get(row)[0] if at_depth is None else at_depth
         top = row
         while top > 0:
             prev_depth, prev_linked = self._struct_get(top - 1)
@@ -7952,6 +8112,29 @@ class TasksPanel(wx.Panel):
                 break
         return bottom - top + 1
 
+    def _follower_depth_ok(self, anchor_row: int, attach_to: int, followers: list) -> bool:
+        """v2.1 depth rule for linking at any nesting level. The box
+        lives at the anchor's depth; attach_to (the row the first
+        follower sits under) must already be in that box (same depth),
+        and every would-be follower must currently sit either AT the
+        anchor's depth (a sibling — the classic v2.0 case) or exactly
+        ONE level deeper (the natural 'Nest it under the mother, then
+        Link it' workflow — Link then pulls it up to the mother's
+        depth, see _on_link_marked). Anything else — a shallower row,
+        or one two+ levels deeper — is an ambiguous intent and is
+        refused. Also refuses if any follower is currently nested under
+        a DIFFERENT parent than the anchor: a depth+1 row is only a
+        legitimate link candidate when the anchor's box is the thing
+        directly above it."""
+        anchor_depth, _ = self._struct_get(anchor_row)
+        if self._struct_get(attach_to)[0] != anchor_depth:
+            return False
+        for r in followers:
+            d, _ = self._struct_get(r)
+            if d not in (anchor_depth, anchor_depth + 1):
+                return False
+        return True
+
     def _link_menu_allowed(self, rows: list) -> bool:
         """Menu-gating mirror of _on_link_marked's own per-row checks —
         the Link item is grayed unless the selection would actually
@@ -7964,9 +8147,15 @@ class TasksPanel(wx.Panel):
         flag is a real device write row (_row_linkable_as_follower —
         not empty, not control, not script); the effective mother (top
         of the box the first row attaches to) is a device row or
-        control_counter (_row_valid_as_anchor); everything at depth 0
-        with no children (v1: linking and nesting don't combine); and
-        the resulting box stays within MAX_LINK_CHAIN."""
+        control_counter (_row_valid_as_anchor); no follower has a
+        child of its own (followers are leaves); and the resulting box
+        stays within MAX_LINK_CHAIN.
+
+        v2.1: the 'depth 0 only' and 'anchor has no children'
+        conditions are gone — linking now works at any nesting depth
+        (one box per level, followers are leaves, the mother's child
+        sits after the box — see _has_child/_box_end). The depth
+        relation between anchor and followers is _follower_depth_ok."""
         rows = sorted(rows)
         if len(rows) < 2:
             r = rows[0]
@@ -7981,11 +8170,9 @@ class TasksPanel(wx.Panel):
             followers = rows[1:]
             attach_to = rows[0]
         anchor_row = self._link_box_anchor(attach_to)
-        if self._struct_get(anchor_row)[0] != 0 or self._struct_get(attach_to)[0] != 0:
+        if not self._follower_depth_ok(anchor_row, attach_to, followers):
             return False
-        if any(self._struct_get(r)[0] != 0 for r in followers):
-            return False
-        if self._has_child(anchor_row) or any(self._has_child(r) for r in followers):
+        if any(self._has_child(r) for r in followers):
             return False
         if not self._row_valid_as_anchor(anchor_row):
             return False
@@ -7994,7 +8181,9 @@ class TasksPanel(wx.Panel):
         # Box size if all of them join: the first follower's hypothetical
         # chain size already counts the existing box above it; each
         # further follower adds exactly one (contiguity checked above).
-        if self._chain_size_if_linked(followers[0]) + (len(followers) - 1) > self.MAX_LINK_CHAIN:
+        anchor_depth, _ = self._struct_get(anchor_row)
+        if self._chain_size_if_linked(followers[0], at_depth=anchor_depth) \
+                + (len(followers) - 1) > self.MAX_LINK_CHAIN:
             return False
         return True
 
@@ -8002,8 +8191,9 @@ class TasksPanel(wx.Panel):
         """Only permitted between same-depth rows (siblings) and within
         MAX_LINK_CHAIN total — see class docstring / _chain_size_if_linked.
         Now ALSO enforces per-row what _link_menu_allowed gates in the
-        menu (real-device follower, valid mother, depth 0, no children)
-        — belt and suspenders, so no future entry point (keyboard
+        menu (real-device follower, valid mother, depth rule, follower
+        has no children) — belt and suspenders, so no future entry
+        point (keyboard
         shortcut, batch action) can create a box execution would have
         to reject.
 
@@ -8018,7 +8208,15 @@ class TasksPanel(wx.Panel):
         was built: every follower's [%] is the box's TOP row's value —
         followers never follow each other (requirement: 'ensure that when you
         link 3 or 4 devices that ALL are linked to the mother and not
-        amongst each other')."""
+        amongst each other').
+
+        v2.1: works at any depth. The follower's depth is SET to the
+        anchor's depth on link (a row that was nested one level under
+        the mother — 'Nest, then Link' — is pulled up into the box;
+        a same-depth sibling is unchanged). See _follower_depth_ok for
+        what is accepted. _chain_size_if_linked is evaluated at the
+        anchor's depth (the box the row is about to join), not the
+        row's current depth."""
         sel = sorted(self.grid.GetSelectedRows())
         if len(sel) < 2:
             if not sel or sel[0] == 0:
@@ -8028,13 +8226,10 @@ class TasksPanel(wx.Panel):
                 return   # defensive — entry point already filters these out
             if not self._link_menu_allowed([row]):
                 return
-            depth, _ = self._struct_get(row)
-            above_depth, _ = self._struct_get(row - 1)
-            if above_depth != depth:
+            anchor_depth, _ = self._struct_get(self._link_box_anchor(row - 1))
+            if self._chain_size_if_linked(row, at_depth=anchor_depth) > self.MAX_LINK_CHAIN:
                 return
-            if self._chain_size_if_linked(row) > self.MAX_LINK_CHAIN:
-                return
-            self._struct_set(row, depth, True)
+            self._struct_set(row, anchor_depth, True)
             self._apply_link_field_locks(row)
         else:
             for i in range(1, len(sel)):
@@ -8045,17 +8240,17 @@ class TasksPanel(wx.Panel):
                     continue   # not contiguous — linking wouldn't be meaningful
                 if not self._row_linkable_as_follower(row):
                     continue
-                if not self._row_valid_as_anchor(self._link_box_anchor(prev_row)):
+                anchor_row = self._link_box_anchor(prev_row)
+                if not self._row_valid_as_anchor(anchor_row):
                     continue
-                depth, _ = self._struct_get(row)
-                prev_depth, _ = self._struct_get(prev_row)
-                if depth != 0 or prev_depth != depth:
+                if not self._follower_depth_ok(anchor_row, prev_row, [row]):
                     continue
                 if self._has_child(row):
                     continue
-                if self._chain_size_if_linked(row) > self.MAX_LINK_CHAIN:
+                anchor_depth, _ = self._struct_get(anchor_row)
+                if self._chain_size_if_linked(row, at_depth=anchor_depth) > self.MAX_LINK_CHAIN:
                     continue
-                self._struct_set(row, depth, True)
+                self._struct_set(row, anchor_depth, True)
                 self._apply_link_field_locks(row)
         self._revalidate_all_rows()   # a newly-linked follower's Start may hold an
                                        # expression — its exemption just changed
@@ -8683,6 +8878,44 @@ class TasksPanel(wx.Panel):
         wx.MessageBox("LaLM assistant — not wired up yet.",
                       'LaLM', wx.OK | wx.ICON_INFORMATION)
 
+    def _simulate_follower_lines(self, stem, follower_rows: list, mother_values: list,
+                                 indent: str):
+        """Preview lines for the followers of one link box (single-level
+        box or one level of a nested chain — v2.1 shares this between
+        both). Mirrors _prepare_followers' checks and evaluates every
+        expression at every mother value. Returns (lines, error):
+        error is None on success, else a message for the first problem
+        (the caller aborts the block's preview, as execution would fail
+        the block). Inactive/empty followers are listed as skipped."""
+        out = []
+        for fr in follower_rows:
+            fr_label = fr + 1
+            fr_alias = self.grid.GetCellValue(fr, self.COL_CMD)
+            fr_on = self.grid.GetCellValue(fr, self.COL_ON) == '1'
+            if not fr_alias or not fr_on:
+                out.append(f'{indent}linked (row {fr_label}): '
+                           f'{fr_alias or "(empty)"} — inactive, skipped')
+                continue
+            fr_device, _, fr_command = fr_alias.partition('_')
+            if fr_device in (STANDARD_DEVICE_NAME, SCRIPT_DEVICE_NAME):
+                return out, (f'{fr_alias} (row {fr_label}): control/script '
+                             f'commands cannot be linked followers')
+            fr_fields = _find_command_fields(stem, fr_device, fr_command)
+            if fr_fields is None:
+                return out, f'{fr_alias} (row {fr_label}): command definition not found'
+            if '[%]' not in fr_fields[4]:
+                return out, (f'{fr_alias} (row {fr_label}): command has no [%] '
+                             f'placeholder — a fixed command string cannot '
+                             f'follow the mother value')
+            fr_expr = self.grid.GetCellValue(fr, self.COL_START)
+            try:
+                computed = [_eval_link_expression(fr_expr, mv) for mv in mother_values]
+            except Exception as e:
+                return out, f'{fr_alias} (row {fr_label}): {e}'
+            shown = _abbreviate([f'{v:g}' for v in computed])
+            out.append(f'{indent}linked: {fr_alias} = {fr_expr} -> {", ".join(shown)}')
+        return out, None
+
     def _simulate_row_description(self, stem, device_name: str, command_name: str,
                                   start_str: str, final_str: str, steps_str: str):
         """Returns (description, n_values) for one row's value/command
@@ -8917,7 +9150,11 @@ class TasksPanel(wx.Panel):
                     fr += 1
                 else:
                     break
-            if box_follow_rows:
+            if box_follow_rows and not self._has_active_child(row):
+                # (v2.1: a mother with BOTH followers and an active
+                # child is a nested chain with a per-level box — handled
+                # by the chain branch below, matching run()'s dispatch
+                # order.)
                 box_lines = []
                 box_error = None
                 mother_values = []
@@ -8946,36 +9183,9 @@ class TasksPanel(wx.Panel):
                     box_error = f'{alias} (row {row + 1}): {e}'
 
                 if box_error is None:
-                    for fr in box_follow_rows:
-                        fr_label = fr + 1
-                        fr_alias = self.grid.GetCellValue(fr, self.COL_CMD)
-                        fr_on = self.grid.GetCellValue(fr, self.COL_ON) == '1'
-                        if not fr_alias or not fr_on:
-                            box_lines.append(f'    linked (row {fr_label}): '
-                                             f'{fr_alias or "(empty)"} — inactive, skipped')
-                            continue
-                        fr_device, _, fr_command = fr_alias.partition('_')
-                        if fr_device in (STANDARD_DEVICE_NAME, SCRIPT_DEVICE_NAME):
-                            box_error = (f'{fr_alias} (row {fr_label}): control/script '
-                                         f'commands cannot be linked followers')
-                            break
-                        fr_fields = _find_command_fields(stem, fr_device, fr_command)
-                        if fr_fields is None:
-                            box_error = f'{fr_alias} (row {fr_label}): command definition not found'
-                            break
-                        if '[%]' not in fr_fields[4]:
-                            box_error = (f'{fr_alias} (row {fr_label}): command has no [%] '
-                                         f'placeholder — a fixed command string cannot '
-                                         f'follow the mother value')
-                            break
-                        fr_expr = self.grid.GetCellValue(fr, self.COL_START)
-                        try:
-                            computed = [_eval_link_expression(fr_expr, mv) for mv in mother_values]
-                        except Exception as e:
-                            box_error = f'{fr_alias} (row {fr_label}): {e}'
-                            break
-                        shown = _abbreviate([f'{v:g}' for v in computed])
-                        box_lines.append(f'    linked: {fr_alias} = {fr_expr} -> {", ".join(shown)}')
+                    fol_lines, box_error = self._simulate_follower_lines(
+                        stem, box_follow_rows, mother_values, '    ')
+                    box_lines.extend(fol_lines)
 
                 box_span = f'{row + 1}-{box_follow_rows[-1] + 1}'
                 if box_error is not None:
@@ -9001,8 +9211,9 @@ class TasksPanel(wx.Panel):
                 chain_rows = [row]
                 cur = row
                 while self._has_active_child(cur):
-                    cur += 1
+                    cur = self._child_row(cur)   # past this level's link box (v2.1)
                     chain_rows.append(cur)
+                chain_end = self._box_end(chain_rows[-1])   # innermost level's box, if any
 
                 chain_lines = []
                 chain_error = None
@@ -9030,14 +9241,40 @@ class TasksPanel(wx.Panel):
                     except Exception as e:
                         chain_error = f'{r_alias} (row {r + 1}): {e}'
                         break
+                    # This level's link box (v2.1): followers between
+                    # the level and its child, previewed with their
+                    # expressions evaluated at every level value —
+                    # exactly what _write_follower_step will send.
+                    r_box_rows = list(range(r + 1, self._box_end(r) + 1))
+                    if r_box_rows:
+                        try:
+                            r_steps_n = int(r_steps) if r_steps.strip() else 0
+                        except ValueError:
+                            r_steps_n = 0
+                        try:
+                            if r_steps_n >= 1:
+                                r_values = _linspace(float(r_start), float(r_final), r_steps_n)
+                            else:
+                                r_values = [float(r_start)]
+                        except ValueError:
+                            chain_error = (f'{r_alias} (row {r + 1}): Constant/Start '
+                                           f'{r_start!r} is not a number — a link-box '
+                                           f'mother needs a numeric value for its '
+                                           f'followers to evaluate [%] against')
+                            break
+                        fol_lines, chain_error = self._simulate_follower_lines(
+                            stem, r_box_rows, r_values, '        ')
+                        chain_lines.extend(fol_lines)
+                        if chain_error is not None:
+                            break
 
-                chain_span = f'{chain_rows[0] + 1}-{chain_rows[-1] + 1}'
+                chain_span = f'{chain_rows[0] + 1}-{chain_end + 1}'
                 if chain_error is not None:
                     lines.append(f'{chain_span}: NESTED CHAIN: ERROR — {chain_error}')
                 else:
                     lines.append(f'{chain_span}: NESTED CHAIN ({total} total measurements):')
                     lines.extend(chain_lines)
-                row += len(chain_rows)
+                row = chain_end + 1   # every row the chain spans, followers included
                 continue
 
             start_str = self.grid.GetCellValue(row, self.COL_START)

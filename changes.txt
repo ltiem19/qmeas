@@ -1,0 +1,121 @@
+qmeas v2.1  (round r64)  --  nesting + linking combined
+========================================================
+Base: GitHub main as of 2026-08-20 (r63 state, APP_VERSION 2.0).
+Checks: py_compile OK; pyflakes shows only the 2 pre-existing unused-import
+warnings (COLOR_TEXT, PAD); AST diff vs base: 15 functions changed, 4 added,
+0 removed (listed below); 23 headless tests pass (tests/).
+
+DESIGN (as agreed)
+- A link box may sit at any nesting depth. One box per level, max 4 rows
+  per box (MAX_LINK_CHAIN unchanged), MAX_DEPTH unchanged at 4.
+- Followers sit directly under their mother at the SAME depth; the mother's
+  nested child is the first row AFTER the box. Followers are leaves (never
+  have children).
+- Per step of a level: level write/ramp/verify -> followers top-to-bottom
+  -> level Integration Time -> recurse / measure. Identical ordering to the
+  single-level link box.
+- Data file: after each level's {level}_count, {level}_value come that
+  level's {alias}_value columns. Chains without links produce the exact
+  same files as before.
+
+qmeas.py
+--------
+APP_VERSION            '2.0' -> '2.1'
+
+_eval_link_expression  NEW check: a number glued to [%] ('[%]e3', '[%]1e3',
+                       '[%]2') raises ValueError with the hint "use [%]*1e3"
+                       instead of a raw SyntaxError. Fires in upfront
+                       validation (Simulate and before any hardware write).
+
+TaskRunnerThread
+  _gather_nested_chain CHANGED. Gathers each level's link box via
+                       _gather_link_box (same live fetch / frontier
+                       freeze). Returns 5-tuple:
+                       (chain_rows, chain_fetched, chain_followers,
+                        all_rows, timed_out). chain_followers[i] = active
+                       followers of level i; all_rows = every row spanned.
+  run()                CHANGED (nested-chain branch only). Unpacks the new
+                       tuple, UI-marks levels + active followers as one
+                       block, advances the scan by len(all_rows), passes
+                       chain_followers/block_rows to _run_nested_sweep.
+  _run_nested_sweep    CHANGED. New kwargs chain_followers=None,
+                       block_rows=None (defaults reproduce old behaviour).
+                       All followers of all levels validated upfront via
+                       _prepare_followers before the first write; failure
+                       -> whole chain FAILED, nothing written. col_labels
+                       for follower columns ("Inner2 linked: alias").
+                       Log: chain description shows "[+alias, ...]" per
+                       level and one "Linked: alias = expr (of mother)"
+                       line per follower. All _on_chain_failed/_on_chain_done
+                       calls use block_rows.
+  _run_nested_level    CHANGED. After the level's own write (and verify),
+                       writes its followers via _write_follower_step, then
+                       the Integration Time. path tuples are now
+                       (step, value, follower_values).
+  _record_nested_measurement
+                       CHANGED. Emits follower values/columns per level
+                       (state['level_follower_aliases']).
+
+TasksPanel
+  _has_child           CHANGED. Linked row -> False. Child = _box_end(row)+1
+                       if deeper. Equals old rule when no linked rows exist.
+  _has_active_child    CHANGED. Checks the real child row (_child_row).
+  _box_end             NEW. Last row of the box `row` anchors (row itself
+                       if none).
+  _child_row           NEW. Index of the structural child or None.
+  _follower_depth_ok   NEW. Depth rule for Link: attach_to at anchor depth;
+                       each follower at anchor depth or anchor depth + 1.
+  _link_menu_allowed   CHANGED. Depth-0-only and anchor-has-no-child
+                       conditions removed; uses _follower_depth_ok; chain
+                       size evaluated at the anchor's depth.
+  _on_link_marked      CHANGED. Sets the follower's depth to the anchor's
+                       depth (a depth+1 row is pulled up into the box).
+                       Same-depth-0 checks removed; per-row checks mirror
+                       the menu gating.
+  _chain_size_if_linked
+                       CHANGED. Optional at_depth= kwarg.
+  _on_unnest_marked    CHANGED. Refuses link-box members (Unlink first).
+  _on_label_right_click
+                       CHANGED. Unnest grayed for box members; comment on
+                       Nest gating updated.
+  _row_in_link_box     docstring only.
+  _on_simulate         CHANGED. Chain walk uses _child_row; per-level
+                       follower preview with computed values; span/advance
+                       cover followers. The single-level LINK BOX branch
+                       now defers to the chain branch when the mother also
+                       has an active child (matches run() dispatch order).
+  _simulate_follower_lines
+                       NEW. Shared follower preview (single-level box and
+                       chain levels); replaces the inline loop in the box
+                       branch, same messages.
+
+Behaviour that is UNCHANGED: single-level sweeps, single-level link boxes,
+constant-with-followers, while loops, drag/flatten (links survive a drag
+exactly as before), task-file format ('depth:linked' column).
+
+docs/qmanual.tex + qmanual.pdf
+  - version 2 -> 2.1 on title page
+  - new warn box in "Linking" about [%]*1e3 syntax
+  - new section "Nesting and linking combined" (2 examples, building
+    instructions, data-file layout, limits)
+  - "What combines with what": "never combine" sentence replaced
+  PDF rebuilt (pdflatex x2). 4 Overfull hbox warnings remain, all
+  pre-existing (lines 566, 723, 851), none in the new text.
+
+qmeas_knowledge_base.md   Linking section: removed "all at the top level"
+                          and "can't both apply"; new subsection "Linking
+                          inside a nested chain (version 2.1)" with example.
+qmeas_examples.md         New Q/A "Can I link devices inside a nested
+                          measurement?".
+README.md                 New Highlights bullet on task-list structure.
+
+tests/ (new, not part of the app)
+  wxstub.py        headless stand-in for wxPython
+  harness.py       fake grid + TasksPanel/TaskRunnerThread without __init__,
+                   stubbed hardware; run with  cd tests && python -m pytest
+  test_nestlink.py 23 tests: structure helpers, link gating (sibling,
+                   depth+1, refusals, multi-select, MAX_LINK_CHAIN), unnest/
+                   nest gating, chain gathering, end-to-end runs of both of
+                   your variants + the i/j/Link/Link/k example (write order,
+                   columns, counts), fail-before-write on '[%]e3', no-link
+                   path unchanged, Simulate output.

@@ -30,6 +30,10 @@ as it is measured and plotted live.
   set up measurements. Nothing leaves your machine. It reads a general
   knowledge file plus your own lab notes, and its answers should be treated as
   suggestions, not authority.
+- **Structured task lists**: nested sweeps (up to 4 levels), linked rows that
+  follow a mother via `[%]` expressions, and — since v2.1 — link groups at any
+  nesting level, so e.g. two signal generators can track a counter inside a
+  field × gate map.
 - **No cloud, no telemetry, no accounts.** Plain files on your disk.
 
 ## Requirements
@@ -59,16 +63,12 @@ Read `qmanual.pdf` — it covers installation, connecting instruments,
 defining commands, LEDs, task rows, nesting/linking, while-loops, the AI
 assistant, and the bridges, in about a dozen pages.
 
-Read `qmeas_tcpip_setup.pdf` if you have trouble connecting your devices via TCPIP.
-
-
 ## Repository layout
 
 | Path | Purpose |
 |---|---|
 | `qmeas.py` + `qmeas_*.py` | the application |
 | `qmanual.pdf` | the manual (Help -> Manual opens exactly this file) |
-| `qmeas_tcpip_setup.pdf` | guide to connect devices via TCPIP |
 | `qbridge/` | bridge framework + OptiCool (×2) and TOPTICA adapters |
 | `devices/` | example device lists |
 | `images/` | application icon |
