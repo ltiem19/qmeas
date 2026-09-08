@@ -84,6 +84,7 @@ import socket
 import threading
 import time
 import wx
+import wx.adv
 import wx.aui as aui
 import wx.grid
 
@@ -11609,11 +11610,25 @@ class QMeasMain(wx.Frame):
         self.assistant_frame.Show()
         self.assistant_frame.Raise()
 
+    GITHUB_URL = 'https://github.com/ltiem19/qmeas'
+
     def _on_about(self, event):
-        wx.MessageBox(
-            'qmeas 2.0 - a quantum measurement tool\n\n'
-            "Developed with Anthropic's Claude.\n\n"
-            'Copyright (c) 2026 Project h_e2\n'
+        """wx.adv.AboutBox instead of the earlier wx.MessageBox: the
+        version comes from APP_VERSION (the MessageBox had '2.0'
+        hardcoded and silently went stale on the 2.1 bump), and
+        SetWebSite gives a clickable GitHub link, which a MessageBox
+        cannot render. Setting website/licence makes wx use its
+        generic dialog on every platform, so the link is clickable
+        everywhere. The full liability disclaimer lives behind the
+        dialog's License button, with the MIT line."""
+        info = wx.adv.AboutDialogInfo()
+        info.SetName(APP_NAME)
+        info.SetVersion(APP_VERSION)
+        info.SetDescription('A quantum measurement tool.\n'
+                            "Developed with Anthropic's Claude.")
+        info.SetCopyright('Copyright (c) 2026 Project h_e2')
+        info.SetWebSite(self.GITHUB_URL, 'qmeas on GitHub')
+        info.SetLicence(
             'MIT license: https://opensource.org/licenses/MIT\n\n'
             'qmeas may contain bugs and behaviour in untested configurations can be '
             'unpredictable. No guarantee is made for correct, safe, or reproducible operation '
@@ -11625,8 +11640,8 @@ class QMeasMain(wx.Frame):
             'human supervision at all times when controlling hazardous equipment such as '
             'superconducting magnets, cryogenic systems, high-voltage sources, or laser '
             'systems. The authors accept no liability for damage to equipment, samples, or '
-            'data arising from the use of this software.',
-            'About', wx.OK | wx.ICON_INFORMATION)
+            'data arising from the use of this software.')
+        wx.adv.AboutBox(info, self)
 
     def _on_close(self, event):
         self.devices_panel.save_query_led_states()
