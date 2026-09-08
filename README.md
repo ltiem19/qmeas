@@ -1,4 +1,5 @@
-# qmeas V2.1 !!!BETA!!! --> Use main branch to download V2.0
+# qmeas V2.1 !!!BETA!!! 
+--> Use main branch to download stable V2.0
 
 A desktop application for running measurement sequences against laboratory
 instruments — magnets, source-measure units, lock-in amplifiers, cryostats,
