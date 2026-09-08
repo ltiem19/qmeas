@@ -1,4 +1,4 @@
-# qmeas
+# qmeas V2.0
 
 A desktop application for running measurement sequences against laboratory
 instruments — magnets, source-measure units, lock-in amplifiers, cryostats,
